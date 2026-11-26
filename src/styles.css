@@ -4066,3 +4066,257 @@ body,
   border-color: var(--border-strong);
   color: var(--text-main);
 }
+
+/* ===== 群聊移动端适配 · 配置备份 · Markdown 导出 ===== */
+
+.mobile-group-tab {
+  position: relative;
+  color: var(--text-main);
+}
+
+.mobile-tab-group-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+}
+
+.mobile-tab-group-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.group-back-btn {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--list-bg);
+  color: var(--text-main);
+  font-size: 15px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.group-back-btn:active {
+  transform: scale(0.96);
+}
+
+.group-export-note {
+  margin: 10px 16px 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  background: var(--list-bg);
+  color: var(--text-main);
+  flex-shrink: 0;
+}
+
+.group-export-note.error {
+  border-color: #f3c2c2;
+  background: #fdf1f1;
+  color: #a4341f;
+}
+
+.group-export-note.ok {
+  border-color: #c5e3cf;
+  background: #f1faf4;
+  color: #1d6b3a;
+}
+
+.group-export-panel {
+  margin: 10px 16px 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--list-bg);
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  max-height: 52%;
+}
+
+.group-export-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.group-export-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-export-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.group-export-actions .btn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.group-export-text {
+  width: 100%;
+  flex: 1;
+  min-height: 140px;
+  resize: vertical;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text-main);
+  padding: 9px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.group-export-hint {
+  font-size: 11.5px;
+  color: var(--text-sub);
+  line-height: 1.5;
+}
+
+.backup-field {
+  margin-top: 4px;
+}
+
+.backup-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+
+.backup-actions .btn {
+  padding: 6px 11px;
+  font-size: 12.5px;
+}
+
+.backup-file-label {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.backup-file-input {
+  display: none;
+}
+
+.backup-textarea {
+  width: 100%;
+  min-height: 108px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.backup-status {
+  min-height: 16px;
+}
+
+.backup-status.ok {
+  color: #1d6b3a;
+}
+
+.backup-status.error {
+  color: #a4341f;
+}
+
+:root[data-theme="dark"] .backup-status.ok {
+  color: #7ad39b;
+}
+
+:root[data-theme="dark"] .backup-status.error {
+  color: #f0937f;
+}
+
+:root[data-theme="dark"] .group-export-note.ok {
+  background: #16301f;
+  border-color: #245036;
+  color: #8fe0ac;
+}
+
+:root[data-theme="dark"] .group-export-note.error {
+  background: #351d1a;
+  border-color: #5b2c25;
+  color: #f0a08c;
+}
+
+/* 移动端群聊：单列铺满 */
+.mobile-shell .group-chat-stage,
+.mobile-shell .group-chat-header,
+.mobile-shell .group-composer {
+  width: 100%;
+}
+
+.mobile-shell .group-chat-header {
+  padding: 10px 12px 8px;
+  flex-wrap: wrap;
+}
+
+.mobile-shell .group-messages {
+  padding: 12px;
+  gap: 12px;
+}
+
+.mobile-shell .group-composer {
+  padding: 8px 12px 12px;
+}
+
+.mobile-shell .group-header-actions {
+  width: 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mobile-shell .group-header-actions .btn {
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.mobile-shell .group-member-bar {
+  gap: 6px;
+}
+
+.mobile-shell .group-export-panel {
+  margin: 8px 12px 0;
+  max-height: 46%;
+}
+
+.mobile-shell .group-export-text {
+  min-height: 110px;
+}
+
+.mobile-shell .group-chat-input {
+  font-size: 14px;
+}
+
+.mobile-shell .group-bubble {
+  max-width: 100%;
+}
+
+.mobile-shell .modal-card {
+  max-height: 88vh;
+  overflow-y: auto;
+}

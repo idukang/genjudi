@@ -11,7 +11,6 @@ use crate::providers::{is_verified_callback_origin, ProviderSpec};
 #[cfg(desktop)]
 use crate::site_adapters::SiteAdapterConfig;
 use crate::site_adapters::{self, SiteAdaptersSnapshot};
-#[cfg(desktop)]
 use crate::storage::GroupChatMessage;
 #[cfg(any(desktop, test))]
 use crate::storage::GroupThreadBinding;
@@ -9118,7 +9117,6 @@ impl SessionManager {
     (became_authenticated, needs_cookie_check)
   }
 
-  #[cfg(any(desktop, test))]
   fn resolve_member_alias_locked(locked: &InnerState, key: &AccountKey) -> Option<String> {
     if key.provider_id.is_external() {
       locked
@@ -9772,6 +9770,12 @@ impl SessionManager {
     args: Vec<String>,
     workdir: Option<String>,
   ) -> Result<ManagerSnapshot, String> {
+    #[cfg(not(desktop))]
+    {
+      if kind == ExternalAgentKind::LocalCli {
+        return Err("本地 CLI 成员仅支持桌面端，移动端请使用 OpenAI 兼容 API 成员".to_string());
+      }
+    }
     let mut locked = self.inner.lock().await;
     let existing_pos = id
       .as_deref()
@@ -9949,6 +9953,42 @@ impl SessionManager {
       locked.app_data_dir.clone()
     };
     site_adapters::reset_overrides(&app_data_dir)
+  }
+
+  /// 导出配置备份：自定义服务、API/CLI 成员、群聊元数据与设置，附 SHA-256 校验和。
+  pub async fn export_config_bundle(&self, include_api_keys: bool) -> Result<String, String> {
+    let locked = self.inner.lock().await;
+    crate::config_bundle::build_bundle(&locked.store, include_api_keys)
+  }
+
+  /// 导入配置备份：校验和验证通过后再合并写入，写入失败会完整回滚。
+  pub async fn import_config_bundle(
+    &self,
+    raw_json: &str,
+  ) -> Result<crate::config_bundle::BundleImportOutcome, String> {
+    let mut locked = self.inner.lock().await;
+    let prev_providers = locked.store.custom_providers.clone();
+    let prev_agents = locked.store.external_agents.clone();
+    let prev_groups = locked.store.group_chats.clone();
+    let prev_settings = locked.store.settings.clone();
+    let summary = crate::config_bundle::apply_bundle(&mut locked.store, raw_json)?;
+    if let Err(err) = save_store_atomic(&locked.store_path, &locked.store) {
+      locked.store.custom_providers = prev_providers;
+      locked.store.external_agents = prev_agents;
+      locked.store.group_chats = prev_groups;
+      locked.store.settings = prev_settings;
+      return Err(err);
+    }
+    self
+      .minimize_to_tray
+      .store(locked.store.settings.minimize_to_tray, Ordering::SeqCst);
+    self
+      .auto_approve
+      .store(locked.store.settings.auto_approve, Ordering::SeqCst);
+    Ok(crate::config_bundle::BundleImportOutcome {
+      summary,
+      snapshot: Self::snapshot_from_locked(&locked),
+    })
   }
 
   pub async fn clear_group_messages(
@@ -10331,8 +10371,9 @@ impl SessionManager {
   ) -> Result<ManagerSnapshot, String> {
     #[cfg(not(desktop))]
     {
-      let _ = (app, group_id, content, target_members, auto_channels);
-      Err("群聊功能暂仅支持桌面端".to_string())
+      return self
+        .send_group_message_mobile(app, group_id, content, target_members, auto_channels)
+        .await;
     }
 
     #[cfg(desktop)]
@@ -10669,8 +10710,7 @@ impl SessionManager {
   ) -> Result<ManagerSnapshot, String> {
     #[cfg(not(desktop))]
     {
-      let _ = (app, group_id, msg_id);
-      Err("群聊功能暂仅支持桌面端".to_string())
+      return self.retry_group_message_mobile(app, group_id, msg_id).await;
     }
 
     #[cfg(desktop)]
@@ -10790,6 +10830,448 @@ impl SessionManager {
     }
   }
 
+  /// 移动端群聊：只调度 OpenAI 兼容 API 成员；网页账号与本地 CLI 仍需桌面端。
+  #[cfg(not(desktop))]
+  async fn send_group_message_mobile(
+    self: &Arc<Self>,
+    app: &AppHandle,
+    group_id: String,
+    content: String,
+    target_members: Option<Vec<AccountKey>>,
+    auto_channels: Option<Vec<String>>,
+  ) -> Result<ManagerSnapshot, String> {
+    let _ = auto_channels;
+    let trimmed = content.trim().to_string();
+    if trimmed.is_empty() {
+      return Err("发送内容不能为空".to_string());
+    }
+    if trimmed.chars().count() > 4000 {
+      return Err("单条群聊消息不能超过 4000 字".to_string());
+    }
+
+    let (snap, jobs, user_msg_id) = {
+      let mut locked = self.inner.lock().await;
+      if !locked.conflicts.is_empty() {
+        return Err("存在 UUID 归属冲突，请先处理冲突后再发消息".to_string());
+      }
+      let g_idx = locked
+        .store
+        .group_chats
+        .iter()
+        .position(|g| g.id == group_id)
+        .ok_or_else(|| "未找到对应的群聊".to_string())?;
+      let eligible_members = Self::collect_group_eligible_members_locked(&locked, g_idx);
+      if eligible_members.is_empty() {
+        return Err("没有可用的群聊成员（请先登录账号或添加 API 成员）".to_string());
+      }
+      let ts = now_ms();
+      let targets = Self::resolve_group_dispatch_targets_locked(
+        &mut locked,
+        &group_id,
+        &trimmed,
+        &eligible_members,
+        target_members,
+        None,
+        ts,
+      )?;
+      let api_keys: Vec<AccountKey> = locked
+        .store
+        .external_agents
+        .iter()
+        .filter(|e| e.kind == ExternalAgentKind::OpenaiApi)
+        .map(|e| e.account_key())
+        .collect();
+      if !targets.iter().any(|(key, _, _)| api_keys.contains(key)) {
+        return Err(
+          "移动端群聊仅支持 API 成员：请先在「API/CLI」中添加 OpenAI 兼容成员并加入本群"
+            .to_string(),
+        );
+      }
+
+      let user_id = Uuid::new_v4().hyphenated().to_string();
+      let target_keys: Vec<AccountKey> = targets.iter().map(|(key, _, _)| key.clone()).collect();
+      locked.store.group_chats[g_idx]
+        .messages
+        .push(GroupChatMessage {
+          id: user_id.clone(),
+          role: "user".to_string(),
+          sender: None,
+          sender_name: "我".to_string(),
+          content: trimmed.clone(),
+          created_at_ms: ts,
+          status: GroupReplyStatus::Done,
+          targets: target_keys,
+          error: None,
+          stage_label: None,
+          hop_depth: 0,
+          auto_routed_channel: None,
+        });
+
+      let mut jobs: Vec<(AccountKey, String)> = Vec::new();
+      for (offset, (member_key, alias, _channel)) in targets.into_iter().enumerate() {
+        let reply_id = Uuid::new_v4().hyphenated().to_string();
+        let is_api_member = api_keys.contains(&member_key);
+        let (status, error) = if is_api_member {
+          (GroupReplyStatus::Queued, None)
+        } else {
+          (
+            GroupReplyStatus::Error,
+            Some("网页账号成员需在桌面版中生成回复，移动端仅支持 API 成员".to_string()),
+          )
+        };
+        locked.store.group_chats[g_idx]
+          .messages
+          .push(GroupChatMessage {
+            id: reply_id.clone(),
+            role: "assistant".to_string(),
+            sender: Some(member_key.clone()),
+            sender_name: alias,
+            content: String::new(),
+            created_at_ms: ts + (offset as u64) + 1,
+            status,
+            targets: Vec::new(),
+            error,
+            stage_label: None,
+            hop_depth: 0,
+            auto_routed_channel: None,
+          });
+        if is_api_member {
+          jobs.push((member_key, reply_id));
+        }
+      }
+
+      {
+        let msgs = &mut locked.store.group_chats[g_idx].messages;
+        if msgs.len() > 120 {
+          let excess = msgs.len() - 120;
+          msgs.drain(..excess);
+        }
+      }
+
+      save_store_atomic(&locked.store_path, &locked.store)?;
+      (Self::snapshot_from_locked(&locked), jobs, user_id)
+    };
+
+    self.emit_snapshot(app, &snap);
+
+    let mgr = Arc::clone(self);
+    let app_handle = app.clone();
+    let gid = group_id.clone();
+    let uid = user_msg_id.clone();
+    let raw = trimmed.clone();
+    tauri::async_runtime::spawn(async move {
+      for (member_key, msg_id) in jobs {
+        mgr
+          .run_mobile_group_turn(&app_handle, &gid, &member_key, &msg_id, &uid, &raw)
+          .await;
+      }
+    });
+
+    Ok(snap)
+  }
+
+  #[cfg(not(desktop))]
+  async fn retry_group_message_mobile(
+    self: &Arc<Self>,
+    app: &AppHandle,
+    group_id: String,
+    msg_id: String,
+  ) -> Result<ManagerSnapshot, String> {
+    let (snap, member_key, user_msg_id, raw_content) = {
+      let mut locked = self.inner.lock().await;
+      if !locked.conflicts.is_empty() {
+        return Err("存在 UUID 归属冲突，请先处理冲突后再重试".to_string());
+      }
+      let g_idx = locked
+        .store
+        .group_chats
+        .iter()
+        .position(|g| g.id == group_id)
+        .ok_or_else(|| "未找到对应的群聊".to_string())?;
+      let msg_idx = locked.store.group_chats[g_idx]
+        .messages
+        .iter()
+        .position(|m| m.id == msg_id && m.role == "assistant")
+        .ok_or_else(|| "未找到可重试的回复消息".to_string())?;
+
+      let (member_key, msg_status) = {
+        let target = &locked.store.group_chats[g_idx].messages[msg_idx];
+        (
+          target
+            .sender
+            .clone()
+            .ok_or_else(|| "找不到该消息对应的成员".to_string())?,
+          target.status,
+        )
+      };
+      if !matches!(
+        msg_status,
+        GroupReplyStatus::Error | GroupReplyStatus::NeedsAuth
+      ) {
+        return Err("仅支持对失败或待授权的消息点击重试".to_string());
+      }
+      let is_api_member = locked
+        .store
+        .external_agents
+        .iter()
+        .any(|e| e.account_key() == member_key && e.kind == ExternalAgentKind::OpenaiApi);
+      if !is_api_member {
+        return Err("网页账号成员需在桌面版中重试".to_string());
+      }
+
+      let (user_msg_id, raw_content) = locked.store.group_chats[g_idx].messages[..msg_idx]
+        .iter()
+        .rev()
+        .find(|m| m.role == "user" && !m.content.trim().is_empty())
+        .map(|m| (m.id.clone(), m.content.clone()))
+        .ok_or_else(|| "找不到对应的原始提问消息，请重新发送".to_string())?;
+
+      {
+        let msg_mut = &mut locked.store.group_chats[g_idx].messages[msg_idx];
+        msg_mut.status = GroupReplyStatus::Queued;
+        msg_mut.content.clear();
+        msg_mut.error = None;
+      }
+      save_store_atomic(&locked.store_path, &locked.store)?;
+      (
+        Self::snapshot_from_locked(&locked),
+        member_key,
+        user_msg_id,
+        raw_content,
+      )
+    };
+
+    self.emit_snapshot(app, &snap);
+
+    let mgr = Arc::clone(self);
+    let app_handle = app.clone();
+    let gid = group_id.clone();
+    let mid = msg_id.clone();
+    tauri::async_runtime::spawn(async move {
+      mgr
+        .run_mobile_group_turn(
+          &app_handle,
+          &gid,
+          &member_key,
+          &mid,
+          &user_msg_id,
+          &raw_content,
+        )
+        .await;
+    });
+
+    Ok(snap)
+  }
+
+  #[cfg(not(desktop))]
+  async fn run_mobile_group_turn(
+    self: &Arc<Self>,
+    app: &AppHandle,
+    group_id: &str,
+    member_key: &AccountKey,
+    msg_id: &str,
+    user_msg_id: &str,
+    raw_user_content: &str,
+  ) {
+    let (agent, system_section, user_section) = {
+      let locked = self.inner.lock().await;
+      let agent = locked
+        .store
+        .external_agents
+        .iter()
+        .find(|e| e.account_key() == *member_key)
+        .cloned();
+      let (system_section, user_section) = Self::build_mobile_turn_prompt(
+        &locked,
+        group_id,
+        member_key,
+        user_msg_id,
+        raw_user_content,
+      );
+      (agent, system_section, user_section)
+    };
+
+    let Some(agent) = agent else {
+      self
+        .update_group_message_state(
+          app,
+          group_id,
+          msg_id,
+          GroupReplyStatus::Error,
+          None,
+          Some(Some("API 成员不存在或已被移除".to_string())),
+          true,
+        )
+        .await;
+      return;
+    };
+
+    if !self
+      .update_group_message_state(
+        app,
+        group_id,
+        msg_id,
+        GroupReplyStatus::Sending,
+        None,
+        Some(None),
+        true,
+      )
+      .await
+    {
+      return;
+    }
+
+    let (prog_tx, mut prog_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let mgr_prog = Arc::clone(self);
+    let app_prog = app.clone();
+    let gid_prog = group_id.to_string();
+    let mid_prog = msg_id.to_string();
+    let fwd_handle = tauri::async_runtime::spawn(async move {
+      while let Some(partial) = prog_rx.recv().await {
+        let _ = mgr_prog
+          .update_group_message_state(
+            &app_prog,
+            &gid_prog,
+            &mid_prog,
+            GroupReplyStatus::Streaming,
+            Some(partial),
+            None,
+            false,
+          )
+          .await;
+      }
+    });
+
+    let result =
+      group_transport::execute_openai_api_turn(&agent, &system_section, &user_section, |partial| {
+        let _ = prog_tx.send(partial);
+      })
+      .await;
+
+    drop(prog_tx);
+    let _ = fwd_handle.await;
+
+    match result {
+      Ok(text) => {
+        self
+          .update_group_message_state(
+            app,
+            group_id,
+            msg_id,
+            GroupReplyStatus::Done,
+            Some(text),
+            Some(None),
+            true,
+          )
+          .await;
+      }
+      Err(err) => {
+        self
+          .update_group_message_state(
+            app,
+            group_id,
+            msg_id,
+            GroupReplyStatus::Error,
+            None,
+            Some(Some(err)),
+            true,
+          )
+          .await;
+      }
+    }
+  }
+
+  #[cfg(not(desktop))]
+  fn build_mobile_turn_prompt(
+    locked: &InnerState,
+    group_id: &str,
+    member_key: &AccountKey,
+    user_msg_id: &str,
+    raw_user_content: &str,
+  ) -> (String, String) {
+    let Some(group) = locked.store.group_chats.iter().find(|g| g.id == group_id) else {
+      return (String::new(), raw_user_content.trim().to_string());
+    };
+    let member_pairs: Vec<(AccountKey, String)> = group
+      .members
+      .iter()
+      .filter_map(|m| Self::resolve_member_alias_locked(locked, m).map(|alias| (m.clone(), alias)))
+      .collect();
+    let clean_question = Self::strip_routing_mentions(raw_user_content, &member_pairs);
+
+    let mut system_sections: Vec<String> = Vec::new();
+    let member_role = group
+      .member_roles
+      .iter()
+      .find(|r| &r.member == member_key)
+      .map(|r| r.role.trim())
+      .filter(|r| !r.is_empty());
+    if let Some(role) = member_role {
+      system_sections.push(format!(
+        "[回答视角偏好]\n请重点从「{role}」视角进行分析与解答。"
+      ));
+    }
+    let ctx_snip: String = group.shared_context.trim().chars().take(3000).collect();
+    if !ctx_snip.trim().is_empty() {
+      system_sections.push(format!("[背景资料]\n{}", ctx_snip.trim()));
+    }
+    let skill_lines: Vec<String> = group
+      .shared_skills
+      .iter()
+      .filter(|s| s.enabled)
+      .map(|s| format!("- 《{}》：{}", s.name.trim(), s.content.trim()))
+      .collect();
+    if !skill_lines.is_empty() {
+      let joined: String = skill_lines.join("\n").chars().take(3000).collect();
+      system_sections.push(format!("[输出规范]\n{joined}"));
+    }
+
+    let cutoff = group
+      .messages
+      .iter()
+      .position(|m| m.id == user_msg_id)
+      .unwrap_or(group.messages.len());
+    let mut history: Vec<String> = group.messages[..cutoff]
+      .iter()
+      .rev()
+      .filter(|m| {
+        m.id != user_msg_id && m.status == GroupReplyStatus::Done && !m.content.trim().is_empty()
+      })
+      .take(6)
+      .map(|m| {
+        if m.role == "user" {
+          let question = Self::strip_routing_mentions(&m.content, &member_pairs);
+          format!(
+            "- 提问: {}",
+            question.trim().chars().take(200).collect::<String>()
+          )
+        } else {
+          let speaker = m
+            .sender
+            .as_ref()
+            .and_then(|sk| Self::resolve_member_alias_locked(locked, sk))
+            .unwrap_or_else(|| m.sender_name.clone());
+          format!(
+            "- 参考（{speaker}）: {}",
+            m.content.trim().chars().take(320).collect::<String>()
+          )
+        }
+      })
+      .collect();
+    history.reverse();
+
+    let mut user_sections: Vec<String> = Vec::new();
+    if !history.is_empty() {
+      user_sections.push(format!("[上文纪要]\n{}", history.join("\n")));
+    }
+    user_sections.push(format!(
+      "[当前问题]\n{}\n（请直接回答「当前问题」，不要复述上方方括号标题）",
+      clean_question.trim()
+    ));
+
+    (system_sections.join("\n\n"), user_sections.join("\n\n"))
+  }
+
   pub async fn sync_group_message_reply(
     self: &Arc<Self>,
     app: &AppHandle,
@@ -10799,7 +11281,7 @@ impl SessionManager {
     #[cfg(not(desktop))]
     {
       let _ = (app, group_id, msg_id);
-      Err("群聊功能暂仅支持桌面端".to_string())
+      Err("同步回复仅支持桌面端".to_string())
     }
 
     #[cfg(desktop)]
@@ -10954,7 +11436,6 @@ impl SessionManager {
     serde_json::from_str::<serde_json::Value>(&raw).ok()
   }
 
-  #[cfg(desktop)]
   async fn update_group_message_state(
     &self,
     app: &AppHandle,

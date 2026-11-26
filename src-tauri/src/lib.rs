@@ -1,3 +1,4 @@
+mod config_bundle;
 mod group_transport;
 mod platform;
 mod providers;
@@ -509,6 +510,32 @@ async fn reset_site_adapter_overrides(
 }
 
 #[tauri::command]
+async fn export_config_bundle(
+  mgr: State<'_, Arc<SessionManager>>,
+  webview: tauri::Webview,
+  include_api_keys: Option<bool>,
+) -> Result<String, String> {
+  if webview.label() != "manager" {
+    return Err("仅账号管理页可以导出配置备份".to_string());
+  }
+  mgr
+    .export_config_bundle(include_api_keys.unwrap_or(false))
+    .await
+}
+
+#[tauri::command]
+async fn import_config_bundle(
+  mgr: State<'_, Arc<SessionManager>>,
+  webview: tauri::Webview,
+  raw_json: String,
+) -> Result<config_bundle::BundleImportOutcome, String> {
+  if webview.label() != "manager" {
+    return Err("仅账号管理页可以导入配置备份".to_string());
+  }
+  mgr.import_config_bundle(&raw_json).await
+}
+
+#[tauri::command]
 async fn check_for_updates(app: AppHandle) -> Result<UpdateCheckResult, String> {
   updater::check_for_updates(&app).await
 }
@@ -739,6 +766,8 @@ pub fn run() {
       get_site_adapters,
       save_site_adapter_overrides,
       reset_site_adapter_overrides,
+      export_config_bundle,
+      import_config_bundle,
       check_for_updates,
       download_and_install_update,
       open_external_url,

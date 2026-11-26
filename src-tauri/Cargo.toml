@@ -1,6 +1,6 @@
 [package]
 name = "multi-agent-account-manager"
-version = "0.1.10"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 
@@ -19,13 +19,16 @@ serde_json = "1"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+# Shared (desktop + Android + iOS): pure-rust TLS so the mobile toolchains never
+# need OpenSSL. `system-proxy` stays desktop-only (see the target section below).
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2"] }
+sha2 = "0.10"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri = { version = "=2.12.6", features = ["unstable", "tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2.3.2"
 open = "5"
-reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2", "system-proxy"] }
-sha2 = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["system-proxy"] }
 
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 arboard = { version = "3.6.1", default-features = false }

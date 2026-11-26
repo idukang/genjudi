@@ -288,6 +288,13 @@ let modal: ModalMode = { kind: "none" };
 let optimisticSwitching: AccountKey | null = null;
 let busy = false;
 let viewMode: "provider" | "groups" = "provider";
+let mobileGroupDetailOpen = false;
+let groupMarkdownExport: { title: string; markdown: string; note: string } | null = null;
+let groupExportNote: { text: string; error: boolean } | null = null;
+let groupExportNoteTimer: number | undefined;
+let backupDraft = "";
+let backupIncludeKeys = false;
+let backupStatus: { text: string; error: boolean } = { text: "", error: false };
 let lastGroupListScroll = 0;
 let shouldAnimateModal = false;
 let modalOverlayScrollTop = 0;
@@ -366,7 +373,8 @@ function isMobilePlatform(platform: ManagerSnapshot["platform"] | undefined): bo
 function syncViewModeFromSnapshot(state: ManagerSnapshot | null): void {
   if (!state) return;
   if (isMobilePlatform(state.platform)) {
-    viewMode = "provider";
+    if (viewMode !== "groups") viewMode = "provider";
+    if (!state.activeGroupId) mobileGroupDetailOpen = false;
     return;
   }
   if (state.activeGroupId) {
@@ -1337,6 +1345,7 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
   }
   if (modal.kind === "settings") {
     const saving = Boolean(modal.saving);
+    const mobileSettings = isMobilePlatform(platform);
     const shortcutPresets = [
       { label: "默认", val: "CommandOrControl+Shift+M" },
       { label: "Alt+Space", val: "Alt+Space" },
@@ -1353,8 +1362,10 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
     return `
       <div class="${modalOverlayClass()}" role="dialog" aria-modal="true">
         <div class="modal-card">
-          <div class="modal-title">桌面端设置</div>
-          <label class="setting-row" for="modal-tray-checkbox">
+          <div class="modal-title">${mobileSettings ? "设置" : "桌面端设置"}</div>
+          ${mobileSettings
+            ? ""
+            : `<label class="setting-row" for="modal-tray-checkbox">
             <span class="setting-label">关闭主窗口时最小化到系统托盘</span>
             <input id="modal-tray-checkbox" class="setting-checkbox" type="checkbox" ${modal.minimizeToTray ? "checked" : ""} ${saving ? "disabled" : ""} />
           </label>
@@ -1378,11 +1389,32 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
                 .join("")}
             </div>
             ${state.globalShortcutError && !modal.error ? `<div class="modal-hint error-hint">${escapeHtml(state.globalShortcutError)}</div>` : `<div class="modal-hint">在任意应用中按下快捷键即可显示或隐藏主窗口；托盘菜单可完全退出。</div>`}
+          </div>`}
+          <div class="setting-field backup-field">
+            <div class="setting-field-head">
+              <span class="modal-desc">配置备份（自定义服务 / API 成员 / 群聊知识 / 设置）</span>
+            </div>
+            <label class="setting-row" for="backup-include-keys">
+              <span class="setting-label">导出时包含 API Key（明文，仅自己留存）</span>
+              <input id="backup-include-keys" class="setting-checkbox" type="checkbox" ${backupIncludeKeys ? "checked" : ""} />
+            </label>
+            <div class="backup-actions">
+              <button id="backup-export-btn" class="btn" type="button">导出配置备份</button>
+              <button id="backup-save-file-btn" class="btn" type="button">保存为文件</button>
+              <button id="backup-import-btn" class="btn" type="button">导入配置备份</button>
+              <label class="btn backup-file-label" for="backup-file-input">选择备份文件</label>
+              <input id="backup-file-input" class="backup-file-input" type="file" accept=".json,application/json" />
+            </div>
+            <textarea id="backup-text" class="modal-input backup-textarea" rows="6" spellcheck="false" placeholder="点「导出配置备份」后在此显示 JSON；导入时也可把备份 JSON 粘贴到这里">${escapeHtml(backupDraft)}</textarea>
+            <div id="backup-status" class="modal-hint backup-status${backupStatus.error ? " error" : backupStatus.text ? " ok" : ""}">${escapeHtml(backupStatus.text)}</div>
+            <div class="modal-hint">导入按 id 合并：自定义服务与 API 成员覆盖同名项（空 API Key 保留本机值）；群聊保留本机历史消息；SHA-256 校验不匹配会被拒绝。</div>
           </div>
           ${modal.error ? `<div id="modal-error-box" class="update-error-box" role="alert">${escapeHtml(modal.error)}</div>` : ""}
           <div class="modal-footer">
-            <button id="modal-cancel-btn" class="btn" type="button" ${saving ? "disabled" : ""}>取消</button>
-            <button id="modal-confirm-btn" class="btn primary" type="button" ${saving ? "disabled" : ""}>${saving ? "保存中..." : "保存"}</button>
+            <button id="modal-cancel-btn" class="btn" type="button" ${saving ? "disabled" : ""}>${mobileSettings ? "关闭" : "取消"}</button>
+            ${mobileSettings
+              ? ""
+              : `<button id="modal-confirm-btn" class="btn primary" type="button" ${saving ? "disabled" : ""}>${saving ? "保存中..." : "保存"}</button>`}
           </div>
         </div>
       </div>
@@ -1763,10 +1795,14 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
     const eModal = modal;
     const saving = Boolean(eModal.saving);
     const agents = state.externalAgents ?? [];
-    const presetsHtml = EXTERNAL_AGENT_PRESETS.map(
-      (p, idx) =>
-        `<button class="skill-preset-chip" data-ext-preset-idx="${idx}" type="button" ${saving ? "disabled" : ""}>+ ${escapeHtml(p.label)}</button>`
-    ).join("");
+    const presetsHtml = EXTERNAL_AGENT_PRESETS.filter(
+      (p) => !isMobilePlatform(platform) || p.kind === "openai_api"
+    )
+      .map(
+        (p) =>
+          `<button class="skill-preset-chip" data-ext-preset-name="${escapeHtml(p.name)}" type="button" ${saving ? "disabled" : ""}>+ ${escapeHtml(p.label)}</button>`
+      )
+      .join("");
     const listHtml =
       agents.length === 0
         ? `<div class="group-picker-empty">暂未配置 API 或本地 CLI 成员，可点击下方预设或手动添加。</div>`
@@ -1811,7 +1847,7 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
       <div class="${modalOverlayClass()}" role="dialog" aria-modal="true">
         <div class="modal-card group-knowledge-modal-card">
           <div class="modal-title">API / 本地 CLI 混合成员</div>
-          <div class="modal-desc">配置直连 OpenAI 兼容接口或本地 CLI（如 Claude Code / Codex），与网页端账号混编入同一个群聊。</div>
+          <div class="modal-desc">${isMobilePlatform(platform) ? "手机端可直连 OpenAI 兼容接口（DeepSeek / OpenAI / 自建网关等）作为群聊成员；本地 CLI 需在桌面版配置。" : "配置直连 OpenAI 兼容接口或本地 CLI（如 Claude Code / Codex），与网页端账号混编入同一个群聊。"}</div>
           <div class="ext-agent-list">${listHtml}</div>
           <div class="skill-presets-row">
             <span class="skill-presets-label">快速填充：</span>
@@ -1822,7 +1858,7 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
               <span class="skill-editor-title">${eModal.editingId ? "编辑成员" : "新增直连成员"}</span>
               <div class="ext-kind-switch">
                 <button class="mini-btn ${eModal.formKind === "openai_api" ? "primary-text" : ""}" data-ext-kind="openai_api" type="button" ${saving ? "disabled" : ""}>OpenAI API</button>
-                <button class="mini-btn ${eModal.formKind === "local_cli" ? "primary-text" : ""}" data-ext-kind="local_cli" type="button" ${saving ? "disabled" : ""}>本地 CLI</button>
+                ${isMobilePlatform(platform) ? "" : `<button class="mini-btn ${eModal.formKind === "local_cli" ? "primary-text" : ""}" data-ext-kind="local_cli" type="button" ${saving ? "disabled" : ""}>本地 CLI</button>`}
               </div>
             </div>
             <input id="ext-agent-name-input" class="modal-input" maxlength="40" placeholder="群聊显示名称（如：Claude-Code / DeepSeek）" value="${escapeHtml(eModal.nameDraft)}" ${saving ? "disabled" : ""} />
@@ -1951,6 +1987,9 @@ function renderMiddleContent(state: ManagerSnapshot, provider: ProviderInfo): st
   const mobileThemeBtn = isMobile
     ? `<button id="theme-toggle-btn" class="ghost-icon-btn" type="button" title="主题：${themeLabel(themeMode)}（点击切换）">${themeIcon(themeMode)}</button>`
     : "";
+  const mobileSettingsBtn = isMobile
+    ? `<button id="mobile-settings-btn" class="ghost-icon-btn" type="button" title="设置与配置备份">${ICON_SETTINGS}</button>`
+    : "";
   const mobileUpdateBtn = isMobile
     ? `<button id="check-update-btn" class="ghost-icon-btn update-trigger-btn ${hasUpdate ? "has-update" : ""}" type="button" title="${hasUpdate ? `发现新版本 v${escapeHtml(updateState.result!.latestVersion)}` : "检查更新"}">${ICON_UPDATE}${hasUpdate ? `<span class="update-dot"></span>` : ""}</button>`
     : "";
@@ -1958,13 +1997,14 @@ function renderMiddleContent(state: ManagerSnapshot, provider: ProviderInfo): st
   const headerBtnHtml = provider.enabled
     ? `
       ${mobileThemeBtn}
+      ${mobileSettingsBtn}
       ${mobileUpdateBtn}
       ${!isMobile ? `<button id="sync-all-btn" class="ghost-icon-btn" type="button" title="刷新已就绪账号额度">${ICON_REFRESH}</button>` : ""}
       ${provider.isCustom ? `<button id="edit-custom-provider-btn" class="ghost-icon-btn" type="button" title="编辑或删除「${escapeHtml(provider.shortName)}」服务">${ICON_EDIT}</button>` : ""}
       <button id="open-site-btn" class="ghost-icon-btn" type="button" title="在浏览器中打开 ${escapeHtml(provider.shortName)} 官网">${ICON_EXTERNAL}</button>
       <button id="add-account-btn" class="icon-btn primary" type="button">+ 新增</button>
     `
-    : `${mobileThemeBtn}${mobileUpdateBtn}<button id="open-site-btn" class="icon-btn primary" type="button">打开官网 ${ICON_EXTERNAL}</button>`;
+    : `${mobileThemeBtn}${mobileSettingsBtn}${mobileUpdateBtn}<button id="open-site-btn" class="icon-btn primary" type="button">打开官网 ${ICON_EXTERNAL}</button>`;
 
   const listToolbarHtml =
     provider.enabled && providerAccounts.length >= 2 && state.conflicts.length === 0
@@ -2570,6 +2610,7 @@ function renderGroupMiddleContent(state: ManagerSnapshot, provider: ProviderInfo
         ${state.groupChats.length > 0 ? `<span class="count-badge">${state.groupChats.length}</span>` : ""}
       </div>
       <div class="header-actions">
+        ${isMobilePlatform(state.platform) ? `<button id="mobile-settings-btn" class="ghost-icon-btn" type="button" title="设置与配置备份">${ICON_SETTINGS}</button>` : ""}
         <button id="manage-external-agents-btn" class="icon-btn ext-header-btn" type="button" title="管理直连 OpenAI API 与本地 CLI 成员">API/CLI${extCount > 0 ? ` (${extCount})` : ""}</button>
         <button id="create-group-btn" class="icon-btn primary" type="button">+ 创建群聊</button>
       </div>
@@ -2579,6 +2620,151 @@ function renderGroupMiddleContent(state: ManagerSnapshot, provider: ProviderInfo
     ${renderDownloadToast()}
     ${renderModal(state, provider)}
   `;
+}
+
+function groupMessageStatusLabel(status: GroupChatMessage["status"]): string {
+  switch (status) {
+    case "queued":
+      return "排队中";
+    case "sending":
+      return "投递中";
+    case "streaming":
+      return "生成中";
+    case "needs_auth":
+      return "待授权";
+    case "error":
+      return "未完成";
+    default:
+      return "已完成";
+  }
+}
+
+function buildGroupMarkdown(state: ManagerSnapshot, group: GroupChatRecord): string {
+  const lines: string[] = [];
+  const workflowLabel =
+    group.workflowMode === "review"
+      ? "评审流"
+      : group.workflowMode === "a2a_relay"
+        ? "A2A 接力"
+        : "并行";
+  const memberNames = group.members
+    .map((m) => resolveMemberMeta(state, m).alias || "成员")
+    .join("、");
+
+  lines.push(`# ${group.name}`);
+  lines.push("");
+  lines.push(`- 导出时间：${new Date().toLocaleString()}`);
+  lines.push(`- 成员（${group.members.length}）：${memberNames}`);
+  lines.push(`- 协作模式：${workflowLabel}`);
+
+  if (group.sharedContext?.trim()) {
+    lines.push("");
+    lines.push("## 共享上下文");
+    lines.push("");
+    lines.push(group.sharedContext.trim());
+  }
+
+  const skills = (group.sharedSkills ?? []).filter((skill) => skill.enabled);
+  if (skills.length > 0) {
+    lines.push("");
+    lines.push("## 输出规范");
+    for (const skill of skills) {
+      lines.push(`- **${skill.name.trim()}**：${skill.content.trim()}`);
+    }
+  }
+
+  lines.push("");
+  lines.push("## 对话记录");
+  lines.push("");
+
+  for (const msg of group.messages) {
+    const time = formatShortTime(msg.createdAtMs);
+    if (msg.role === "user") {
+      lines.push(`### 我 · ${time}`);
+      lines.push("");
+      lines.push(msg.content.trim() || "（空）");
+    } else {
+      const speaker = resolveGroupMessageSenderName(state, msg);
+      const stage = msg.stageLabel ? `〔${msg.stageLabel}〕` : "";
+      const statusSuffix =
+        msg.status === "done" ? "" : `（${groupMessageStatusLabel(msg.status)}）`;
+      lines.push(`### ${speaker}${stage} · ${time}${statusSuffix}`);
+      lines.push("");
+      if (msg.content.trim()) {
+        lines.push(msg.content.trim());
+      } else if (msg.error) {
+        lines.push(`> ${msg.error}`);
+      } else {
+        lines.push("> （暂无内容）");
+      }
+    }
+    lines.push("");
+  }
+
+  return `${lines.join("\n").replace(/\n{3,}/g, "\n\n").trim()}\n`;
+}
+
+function sanitizeFilename(name: string): string {
+  const cleaned = name
+    .replace(/[\\/:*?"<>|\r\n\t]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || "群聊";
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to the legacy path */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function downloadTextFile(filename: string, text: string, mime: string): boolean {
+  try {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function setGroupExportNote(text: string, isError: boolean): void {
+  groupExportNote = { text, error: isError };
+  if (groupExportNoteTimer !== undefined) {
+    window.clearTimeout(groupExportNoteTimer);
+  }
+  groupExportNoteTimer = window.setTimeout(() => {
+    groupExportNote = null;
+    render();
+  }, 8000);
+  render();
 }
 
 function getLatestRoundCompletedReplies(
@@ -2604,7 +2790,7 @@ function getLatestRoundCompletedReplies(
   return { userText: group.messages[lastUserIdx].content.trim(), replies };
 }
 
-function renderGroupRightStage(state: ManagerSnapshot): string {
+function renderGroupRightStage(state: ManagerSnapshot, isMobileView = false): string {
   const activeGroup = state.activeGroupId
     ? state.groupChats.find((g) => g.id === state.activeGroupId)
     : undefined;
@@ -2771,6 +2957,7 @@ function renderGroupRightStage(state: ManagerSnapshot): string {
             const canSyncReply = Boolean(
               senderKey &&
                 !meta?.isExternal &&
+                !isMobilePlatform(state.platform) &&
                 msg.status !== "queued" &&
                 msg.status !== "sending" &&
                 msg.status !== "streaming"
@@ -2842,6 +3029,7 @@ function renderGroupRightStage(state: ManagerSnapshot): string {
       <div class="group-chat-header">
         <div class="group-header-main">
           <div class="group-header-title-row">
+            ${isMobileView ? `<button id="mobile-group-back-btn" class="group-back-btn" type="button" title="返回群聊列表" aria-label="返回群聊列表">←</button>` : ""}
             <h2 class="group-chat-title">${escapeHtml(activeGroup.name)}</h2>
             <span class="count-badge">${activeGroup.members.length} 位成员</span>
           </div>
@@ -2898,12 +3086,30 @@ function renderGroupRightStage(state: ManagerSnapshot): string {
           <button id="group-edit-members-btn" class="btn" type="button">编辑成员</button>
           <button id="group-clear-msgs-btn" class="btn" type="button" ${activeGroup.messages.length === 0 ? "disabled" : ""}>清空记录</button>
             `}
+          <button id="group-export-md-btn" class="btn" type="button" title="将当前群聊导出为 Markdown 文本（可复制或保存为 .md）">导出 Markdown</button>
         </div>
       </div>
+      ${groupExportNote ? `<div class="group-export-note ${groupExportNote.error ? "error" : "ok"}" role="status">${escapeHtml(groupExportNote.text)}</div>` : ""}
+      ${groupMarkdownExport
+        ? `<div class="group-export-panel">
+            <div class="group-export-head">
+              <span class="group-export-title">${escapeHtml(groupMarkdownExport.title)}</span>
+              <div class="group-export-actions">
+                <button id="group-export-copy-btn" class="btn primary" type="button">复制</button>
+                <button id="group-export-download-btn" class="btn" type="button">保存为 .md</button>
+                <button id="group-export-close-btn" class="btn" type="button">关闭</button>
+              </div>
+            </div>
+            <textarea id="group-export-text" class="group-export-text" readonly>${escapeHtml(groupMarkdownExport.markdown)}</textarea>
+            <div class="group-export-hint">${escapeHtml(groupMarkdownExport.note)}</div>
+          </div>`
+        : ""}
       <div class="group-messages">${msgsHtml}</div>
       <div class="group-composer">
         <div class="group-workflow-bar">
-          <div class="workflow-mode-group">
+          ${isMobileView
+            ? `<div class="workflow-mode-group"><span class="workflow-label">手机端按并行方式逐一向 API 成员请求回复</span></div>`
+            : `<div class="workflow-mode-group">
             <span class="workflow-label">模式</span>
             <button class="workflow-mode-btn ${workflowMode === "parallel" ? "active" : ""}" data-workflow-mode="parallel" type="button">并行</button>
             <button class="workflow-mode-btn ${workflowMode === "review" ? "active" : ""}" data-workflow-mode="review" type="button">评审流</button>
@@ -2916,7 +3122,7 @@ function renderGroupRightStage(state: ManagerSnapshot): string {
               <button class="workflow-hop-btn ${maxRelayHops === 2 ? "active" : ""}" data-relay-hops="2" type="button">2跳</button>
               <button class="workflow-hop-btn ${maxRelayHops === 3 ? "active" : ""}" data-relay-hops="3" type="button">3跳</button>
             </div>
-          ` : ""}
+          ` : ""}`}
         </div>
         <div class="group-target-chips grouped">
           <button class="group-target-chip ${selectedTargets.length === 0 && selectedAutoIds.length === 0 ? "active" : ""}" data-group-target="all" type="button">全体成员</button>
@@ -3036,13 +3242,23 @@ function render(): void {
   const anyGroupNeedsAuth = snapshot.groupChats.some(groupHasNeedsAuth);
 
   if (isMobile) {
+    const mobileGroupDetail =
+      viewMode === "groups" && mobileGroupDetailOpen && Boolean(snapshot.activeGroupId);
     root.innerHTML = `
       <div class="mobile-shell">
-        <div class="mobile-tabs">
+        ${
+          mobileGroupDetail
+            ? ""
+            : `<div class="mobile-tabs">
+          <button class="mobile-tab mobile-group-tab ${viewMode === "groups" ? "active" : ""}" data-mobile-groups="1" type="button" title="多账号群聊（API 成员可在手机直连）">
+            <span class="mobile-tab-group-icon">${ICON_GROUP}</span>
+            <span>群聊</span>
+            ${anyGroupNeedsAuth ? `<span class="warn-dot" aria-hidden="true"></span>` : ""}
+          </button>
           ${snapshot.providers
             .map(
               (p) => `
-              <button class="mobile-tab ${p.id === provider.id ? "active" : ""}" data-provider="${escapeHtml(p.id)}" type="button">
+              <button class="mobile-tab ${viewMode === "provider" && p.id === provider.id ? "active" : ""}" data-provider="${escapeHtml(p.id)}" type="button">
                 ${renderProviderLogo(p, "mobile-tab-logo")}
                 <span>${escapeHtml(p.shortName)}</span>
               </button>
@@ -3052,9 +3268,16 @@ function render(): void {
           <button id="add-custom-provider-btn" class="mobile-tab" type="button" title="新增自定义 AI 服务">
             <span>+ 服务</span>
           </button>
-        </div>
+        </div>`
+        }
         <div class="middle-column" style="width:100%;min-width:0;flex:1;border-right:none;">
-          ${renderMiddleContent(snapshot, provider)}
+          ${
+            viewMode === "groups"
+              ? mobileGroupDetail
+                ? renderGroupRightStage(snapshot, true)
+                : renderGroupMiddleContent(snapshot, provider)
+              : renderMiddleContent(snapshot, provider)
+          }
         </div>
       </div>
     `;
@@ -3219,7 +3442,16 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     row.addEventListener("click", async () => {
       if (modal.kind !== "none") return;
       const gid = row.dataset.selectGroupId;
-      if (!gid || gid === state.activeGroupId) return;
+      if (!gid) return;
+      if (isMobilePlatform(state.platform)) {
+        mobileGroupDetailOpen = true;
+        if (gid === state.activeGroupId) {
+          forceGroupScrollBottom = true;
+          render();
+          return;
+        }
+      }
+      if (gid === state.activeGroupId) return;
       forceGroupScrollBottom = true;
       await callCommand("select_group_chat", { groupId: gid });
     });
@@ -3814,6 +4046,181 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
 
   document.querySelector("#group-send-btn")?.addEventListener("click", () => {
     void submitGroupMessage();
+  });
+
+  document.querySelector<HTMLElement>("[data-mobile-groups]")?.addEventListener("click", async () => {
+    if (modal.kind !== "none") {
+      await setModal({ kind: "none" });
+    }
+    viewMode = "groups";
+    mobileGroupDetailOpen = false;
+    const targetId = state.activeGroupId ?? state.groupChats[0]?.id ?? null;
+    if (targetId && state.activeGroupId !== targetId) {
+      await callCommand("select_group_chat", { groupId: targetId });
+    } else {
+      render();
+    }
+  });
+
+  document.querySelector("#mobile-group-back-btn")?.addEventListener("click", () => {
+    mobileGroupDetailOpen = false;
+    groupMarkdownExport = null;
+    render();
+  });
+
+  document.querySelector("#group-export-md-btn")?.addEventListener("click", () => {
+    const group = state.activeGroupId
+      ? state.groupChats.find((g) => g.id === state.activeGroupId)
+      : undefined;
+    if (!group) return;
+    groupMarkdownExport = {
+      title: `导出「${group.name}」（Markdown）`,
+      markdown: buildGroupMarkdown(state, group),
+      note: "已生成 Markdown：可复制粘贴，或点「保存为 .md」下载文件。",
+    };
+    render();
+  });
+
+  document.querySelector("#group-export-close-btn")?.addEventListener("click", () => {
+    groupMarkdownExport = null;
+    render();
+  });
+
+  document.querySelector("#group-export-copy-btn")?.addEventListener("click", async () => {
+    const text = groupMarkdownExport?.markdown ?? "";
+    if (!text) return;
+    const ok = await copyTextToClipboard(text);
+    setGroupExportNote(ok ? "Markdown 已复制到剪贴板" : "复制失败，请在文本框内手动选择复制", !ok);
+  });
+
+  document.querySelector("#group-export-download-btn")?.addEventListener("click", () => {
+    const payload = groupMarkdownExport;
+    if (!payload) return;
+    const groupName = state.activeGroupId
+      ? state.groupChats.find((g) => g.id === state.activeGroupId)?.name
+      : undefined;
+    const ok = downloadTextFile(
+      `${sanitizeFilename(groupName ?? "群聊")}.md`,
+      payload.markdown,
+      "text/markdown;charset=utf-8"
+    );
+    setGroupExportNote(
+      ok ? "已开始保存 .md 文件" : "当前环境不支持直接下载，请使用「复制」",
+      !ok
+    );
+  });
+
+  document.querySelector("#mobile-settings-btn")?.addEventListener("click", async () => {
+    if (modal.kind !== "none") return;
+    await setModal({
+      kind: "settings",
+      minimizeToTray: state.settings.minimizeToTray,
+      globalShortcut: state.settings.globalShortcut,
+      autoApprove: Boolean(state.settings.autoApprove),
+    });
+  });
+
+  document.querySelector<HTMLTextAreaElement>("#backup-text")?.addEventListener("input", (ev) => {
+    const target = ev.target as HTMLTextAreaElement;
+    backupDraft = target.value;
+  });
+
+  document.querySelector<HTMLInputElement>("#backup-include-keys")?.addEventListener("change", (ev) => {
+    const target = ev.target as HTMLInputElement;
+    backupIncludeKeys = target.checked;
+  });
+
+  document.querySelector("#backup-export-btn")?.addEventListener("click", async () => {
+    if (modal.kind !== "settings") return;
+    backupStatus = { text: "正在生成备份…", error: false };
+    render();
+    try {
+      const json = await invoke<string>("export_config_bundle", {
+        includeApiKeys: backupIncludeKeys,
+      });
+      backupDraft = json;
+      backupStatus = {
+        text: `备份已生成（${json.length} 字符）：已填入下方文本框，可复制保存或用「保存为文件」。`,
+        error: false,
+      };
+    } catch (err) {
+      backupStatus = { text: `导出失败：${String(err)}`, error: true };
+    }
+    render();
+  });
+
+  document.querySelector("#backup-import-btn")?.addEventListener("click", async () => {
+    if (modal.kind !== "settings") return;
+    const raw = backupDraft.trim();
+    if (!raw) {
+      backupStatus = { text: "请先粘贴备份 JSON，或选择备份文件", error: true };
+      render();
+      return;
+    }
+    backupStatus = { text: "正在校验并导入…", error: false };
+    render();
+    try {
+      const outcome = await invoke<{
+        summary: {
+          customProvidersAdded: number;
+          customProvidersUpdated: number;
+          externalAgentsAdded: number;
+          externalAgentsUpdated: number;
+          groupsAdded: number;
+          groupsUpdated: number;
+          settingsApplied: boolean;
+          includesApiKeys: boolean;
+        };
+        snapshot: ManagerSnapshot;
+      }>("import_config_bundle", { rawJson: raw });
+      const s = outcome.summary;
+      const parts = [
+        `服务 +${s.customProvidersAdded}/↻${s.customProvidersUpdated}`,
+        `API 成员 +${s.externalAgentsAdded}/↻${s.externalAgentsUpdated}`,
+        `群聊 +${s.groupsAdded}/↻${s.groupsUpdated}`,
+        s.settingsApplied ? "设置已恢复" : "设置未变更",
+      ];
+      snapshot = {
+        ...outcome.snapshot,
+        notice: `配置导入完成：${parts.join("，")}${s.includesApiKeys ? "（含 API Key）" : "（不含 API Key）"}`,
+      };
+      backupDraft = "";
+      backupStatus = { text: "导入完成", error: false };
+      await setModal({ kind: "none" });
+    } catch (err) {
+      backupStatus = { text: `导入失败：${String(err)}`, error: true };
+      render();
+    }
+  });
+
+  document.querySelector<HTMLInputElement>("#backup-file-input")?.addEventListener("change", async (ev) => {
+    const input = ev.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      backupDraft = await file.text();
+      backupStatus = { text: `已载入「${file.name}」，点「导入配置备份」应用。`, error: false };
+    } catch (err) {
+      backupStatus = { text: `读取文件失败：${String(err)}`, error: true };
+    }
+    render();
+  });
+
+  document.querySelector("#backup-save-file-btn")?.addEventListener("click", () => {
+    if (!backupDraft.trim()) {
+      backupStatus = { text: "还没有可保存的备份内容", error: true };
+      render();
+      return;
+    }
+    const ok = downloadTextFile(
+      `genjudi-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      backupDraft,
+      "application/json;charset=utf-8"
+    );
+    backupStatus = ok
+      ? { text: "已开始保存备份文件", error: false }
+      : { text: "当前环境不支持直接保存，请复制文本框内容", error: true };
+    render();
   });
 
   document.querySelector("#theme-toggle-btn")?.addEventListener("click", () => {
@@ -4648,12 +5055,13 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-ext-preset-idx]").forEach((btn) => {
+  document.querySelectorAll<HTMLButtonElement>("[data-ext-preset-name]").forEach((btn) => {
     btn.addEventListener("click", () => {
       if (modal.kind !== "external-agents" || modal.saving) return;
-      const idx = Number(btn.dataset.extPresetIdx ?? "-1");
-      const preset = EXTERNAL_AGENT_PRESETS[idx];
+      const presetName = btn.dataset.extPresetName;
+      const preset = EXTERNAL_AGENT_PRESETS.find((p) => p.name === presetName);
       if (!preset) return;
+      if (preset.kind === "local_cli" && isMobilePlatform(snapshot?.platform)) return;
       modal.formKind = preset.kind;
       modal.nameDraft = preset.name;
       modal.baseUrlDraft = preset.baseUrl ?? "";

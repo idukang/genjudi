@@ -2,13 +2,11 @@ use crate::storage::{now_ms, normalize_uuid, AccountKey, ExternalAgentKind, Exte
 use url::Url;
 use uuid::Uuid;
 
-#[cfg(desktop)]
 use serde_json::Value;
 #[cfg(desktop)]
 use std::io::{Read, Write};
 #[cfg(desktop)]
 use std::process::{Command, Stdio};
-#[cfg(desktop)]
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -126,9 +124,7 @@ pub fn build_openai_endpoint(base_url: &str) -> String {
   }
 }
 
-#[cfg_attr(not(desktop), allow(dead_code))]
 pub fn extract_openai_sse_delta(line: &str) -> Option<String> {
-  #[cfg(desktop)]
   {
     let trimmed = line.trim();
     let payload = trimmed.strip_prefix("data:")?.trim();
@@ -162,11 +158,6 @@ pub fn extract_openai_sse_delta(line: &str) -> Option<String> {
     }
     None
   }
-  #[cfg(not(desktop))]
-  {
-    let _ = line;
-    None
-  }
 }
 
 #[cfg_attr(not(desktop), allow(dead_code))]
@@ -183,7 +174,6 @@ pub fn build_cli_args_and_stdin(args: &[String], prompt: &str) -> (Vec<String>, 
   }
 }
 
-#[cfg(desktop)]
 pub async fn execute_openai_api_turn<F>(
   agent: &ExternalAgentRecord,
   system_prompt: &str,
