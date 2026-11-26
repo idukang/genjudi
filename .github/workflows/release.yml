@@ -1,0 +1,335 @@
+name: Build installers
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      android_variant:
+        description: Android build type
+        type: choice
+        options: [release, debug]
+        default: release
+        required: true
+      publish_release:
+        description: Publish GitHub Release
+        type: boolean
+        default: false
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-15
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            build: --target universal-apple-darwin --bundles app,dmg
+            artifact: macos-universal-dmg
+            path: |
+              src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/universal-apple-darwin/release/bundle/macos/account-manager-macos-universal.app.tar.gz
+          - name: Windows
+            runner: windows-2025
+            targets: x86_64-pc-windows-msvc
+            build: --target x86_64-pc-windows-msvc --bundles nsis
+            artifact: windows-x64-nsis
+            path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+      - run: npm ci
+      - run: npm run tauri -- build ${{ matrix.build }} --ci
+      - name: Pack macOS update archive
+        if: matrix.name == 'macOS'
+        run: |
+          macos_dir="src-tauri/target/universal-apple-darwin/release/bundle/macos"
+          app_path=$(find "$macos_dir" -maxdepth 1 -name '*.app' -type d | head -n 1)
+          if [ -z "$app_path" ]; then
+            echo "macOS .app bundle not found" >&2
+            exit 1
+          fi
+          app_name=$(basename "$app_path")
+          COPYFILE_DISABLE=1 tar -czf "$macos_dir/account-manager-macos-universal.app.tar.gz" -C "$macos_dir" "$app_name"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
+          if-no-files-found: error
+
+  android:
+    name: Android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    env:
+      NDK_VERSION: 28.2.13676358
+      BUILD_TOOLS: 37.0.0
+      APK_VARIANT: ${{ github.ref_type == 'tag' && 'release' || inputs.android_variant }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install Android SDK and NDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "platforms;android-37.0" "build-tools;$BUILD_TOOLS" "ndk;$NDK_VERSION"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+      - run: npm ci
+      - run: npm run tauri -- android init --ci --skip-targets-install
+      - name: Build test APK
+        if: env.APK_VARIANT == 'debug'
+        run: |
+          npm run tauri -- android build --debug --apk --ci
+          cp src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk "$RUNNER_TEMP/account-manager-debug.apk"
+      - name: Build release APK
+        if: env.APK_VARIANT == 'release'
+        run: npm run tauri -- android build --apk --ci
+      - name: Sign release APK
+        if: env.APK_VARIANT == 'release'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          umask 077
+          : "${ANDROID_KEYSTORE_BASE64:?Missing release keystore}"
+          keystore="$RUNNER_TEMP/android-release.keystore"
+          trap 'rm -f "$keystore"' EXIT
+          printf %s "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
+            --ks "$keystore" --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
+            --out "$RUNNER_TEMP/account-manager-release.apk" \
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/*-unsigned.apk
+      - name: Verify APK signature
+        run: '"$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify "$RUNNER_TEMP"/account-manager-*.apk'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-universal-${{ env.APK_VARIANT }}
+          path: ${{ runner.temp }}/account-manager-*.apk
+          if-no-files-found: error
+
+  ios:
+    name: iOS (Unsigned IPA)
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+      - name: Ensure iOS CLI dependencies
+        run: |
+          for pkg in xcodegen libimobiledevice cocoapods; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
+      - run: npm ci
+      - name: Build unsigned iOS IPA
+        run: bash scripts/build-ios-ipa.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-unsigned-ipa
+          path: src-tauri/target/ios/account-manager-ios-unsigned.ipa
+          if-no-files-found: error
+
+  publish:
+    name: Publish Release
+    needs: [desktop, android, ios]
+    if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true && inputs.android_variant == 'release')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          name: macos-universal-dmg
+          path: ${{ runner.temp }}/artifacts/macos
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-x64-nsis
+          path: ${{ runner.temp }}/artifacts/windows
+      - uses: actions/download-artifact@v7
+        with:
+          name: android-universal-release
+          path: ${{ runner.temp }}/artifacts/android
+      - uses: actions/download-artifact@v7
+        with:
+          name: ios-unsigned-ipa
+          path: ${{ runner.temp }}/artifacts/ios
+      - name: Prepare release assets and latest.json
+        run: |
+          pub_dir="$RUNNER_TEMP/publish"
+          mkdir -p "$pub_dir"
+
+          mac_tar=$(find "$RUNNER_TEMP/artifacts/macos" -name '*.app.tar.gz' -type f | head -n 1)
+          mac_dmg=$(find "$RUNNER_TEMP/artifacts/macos" -name '*.dmg' -type f | head -n 1)
+          win_exe=$(find "$RUNNER_TEMP/artifacts/windows" -name '*-setup.exe' -type f | head -n 1)
+          android_apk=$(find "$RUNNER_TEMP/artifacts/android" -name '*-release.apk' -type f | head -n 1)
+          ios_ipa=$(find "$RUNNER_TEMP/artifacts/ios" -name '*.ipa' -type f | head -n 1)
+
+          if [ -z "$mac_tar" ] || [ -z "$mac_dmg" ] || [ -z "$win_exe" ] || [ -z "$android_apk" ] || [ -z "$ios_ipa" ]; then
+            echo "Missing required build artifact(s)" >&2
+            exit 1
+          fi
+
+          cp "$mac_tar" "$pub_dir/account-manager-macos-universal.app.tar.gz"
+          cp "$mac_dmg" "$pub_dir/account-manager-macos-universal.dmg"
+          cp "$win_exe" "$pub_dir/account-manager-windows-x64-setup.exe"
+          cp "$android_apk" "$pub_dir/account-manager-android-universal-release.apk"
+          cp "$ios_ipa" "$pub_dir/account-manager-ios-unsigned.ipa"
+
+          cfg_version=$(jq -r '.version' src-tauri/tauri.conf.json)
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            version=$(printf '%s' "$tag" | sed 's/^[vV]//')
+          else
+            version="$cfg_version"
+            tag="v${version}"
+          fi
+
+          mac_sha=$(sha256sum "$pub_dir/account-manager-macos-universal.app.tar.gz" | awk '{print $1}')
+          mac_size=$(stat -c%s "$pub_dir/account-manager-macos-universal.app.tar.gz")
+          win_sha=$(sha256sum "$pub_dir/account-manager-windows-x64-setup.exe" | awk '{print $1}')
+          win_size=$(stat -c%s "$pub_dir/account-manager-windows-x64-setup.exe")
+          apk_sha=$(sha256sum "$pub_dir/account-manager-android-universal-release.apk" | awk '{print $1}')
+          apk_size=$(stat -c%s "$pub_dir/account-manager-android-universal-release.apk")
+          ipa_sha=$(sha256sum "$pub_dir/account-manager-ios-unsigned.ipa" | awk '{print $1}')
+          ipa_size=$(stat -c%s "$pub_dir/account-manager-ios-unsigned.ipa")
+
+          base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
+          pub_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          prev_tag=$(git tag --sort=-creatordate | grep -vxF "$tag" | head -n 1 || true)
+          if [ -n "$prev_tag" ]; then
+            notes=$(git log "${prev_tag}..HEAD" --pretty=format:"- %s" 2>/dev/null || true)
+          fi
+          if [ -z "${notes:-}" ]; then
+            notes=$(git log -n 10 --pretty=format:"- %s" 2>/dev/null || echo "Release ${tag}")
+          fi
+
+          jq -n \
+            --arg version "$version" \
+            --arg notes "$notes" \
+            --arg pub_date "$pub_date" \
+            --arg release_page_url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}" \
+            --arg mac_url "${base_url}/account-manager-macos-universal.app.tar.gz" \
+            --arg mac_sha "$mac_sha" \
+            --argjson mac_size "$mac_size" \
+            --arg win_url "${base_url}/account-manager-windows-x64-setup.exe" \
+            --arg win_sha "$win_sha" \
+            --argjson win_size "$win_size" \
+            --arg apk_url "${base_url}/account-manager-android-universal-release.apk" \
+            --arg apk_sha "$apk_sha" \
+            --argjson apk_size "$apk_size" \
+            --arg ipa_url "${base_url}/account-manager-ios-unsigned.ipa" \
+            --arg ipa_sha "$ipa_sha" \
+            --argjson ipa_size "$ipa_size" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              release_page_url: $release_page_url,
+              platforms: {
+                macos: {
+                  url: $mac_url,
+                  sha256: $mac_sha,
+                  filename: "account-manager-macos-universal.app.tar.gz",
+                  size: $mac_size
+                },
+                windows: {
+                  url: $win_url,
+                  sha256: $win_sha,
+                  filename: "account-manager-windows-x64-setup.exe",
+                  size: $win_size
+                },
+                android: {
+                  url: $apk_url,
+                  sha256: $apk_sha,
+                  filename: "account-manager-android-universal-release.apk",
+                  size: $apk_size
+                },
+                ios: {
+                  url: $ipa_url,
+                  sha256: $ipa_sha,
+                  filename: "account-manager-ios-unsigned.ipa",
+                  size: $ipa_size
+                }
+              }
+            }' > "$pub_dir/latest.json"
+
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          printf '%s\n' "$notes" > "$pub_dir/release-notes.txt"
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pub_dir="$RUNNER_TEMP/publish"
+          files=(
+            "$pub_dir/account-manager-macos-universal.app.tar.gz"
+            "$pub_dir/account-manager-macos-universal.dmg"
+            "$pub_dir/account-manager-windows-x64-setup.exe"
+            "$pub_dir/account-manager-android-universal-release.apk"
+            "$pub_dir/account-manager-ios-unsigned.ipa"
+            "$pub_dir/latest.json"
+          )
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+            gh release edit "$RELEASE_TAG" --title "根据地 $RELEASE_TAG" --notes-file "$pub_dir/release-notes.txt"
+          else
+            extra_args=()
+            if [ "${{ github.ref_type }}" != "tag" ]; then
+              extra_args+=(--target "$GITHUB_SHA")
+            fi
+            gh release create "$RELEASE_TAG" "${files[@]}" \
+              "${extra_args[@]}" \
+              --title "根据地 $RELEASE_TAG" \
+              --notes-file "$pub_dir/release-notes.txt"
+          fi
