@@ -1,0 +1,23 @@
+# 根据地 · 加密中转（自建 Cloudflare Worker）
+#
+# 本项目不提供、也不预置任何官方中转服务器。想让两台不在同一局域网的设备
+# 互相同步时，请用自己的 Cloudflare 账号部署本目录的 Worker，然后把地址
+# （https://<你的域名>）填进 App 的「同步 → 使用自建加密中转通道」。
+#
+# 部署步骤见 relay-worker/README.md
+name = "genjudi-sync-relay"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+# 在这里填自己的自定义域名（可选）。不填也能用 workers.dev 域名。
+# routes = [
+#   { pattern = "sync.example.com", custom_domain = true }
+# ]
+
+[[durable_objects.bindings]]
+name = "RELAY_DROPS"
+class_name = "RelayDropDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayDropDO"]
