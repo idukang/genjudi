@@ -17,9 +17,9 @@ use crate::storage::GroupChatMessage;
 use crate::storage::GroupThreadBinding;
 use crate::storage::{
   detect_conflicts, load_or_migrate_store, normalize_uuid, now_ms, save_store_atomic, AccountKey,
-  AccountRecord, AccountsStoreFile, AppSettings, AuthState, ConflictItem, ExternalAgentKind,
-  ExternalAgentRecord, GroupChatRecord, GroupMemberRole, GroupReplyStatus, GroupSharedSkill,
-  GroupWorkflowMode, QuotaDetail,
+  AccountRecord, AccountsStoreFile, AppSettings, AuthState, ConflictItem, CustomProviderRecord,
+  ExternalAgentKind, ExternalAgentRecord, GroupChatRecord, GroupMemberRole, GroupReplyStatus,
+  GroupSharedSkill, GroupWorkflowMode, QuotaDetail,
 };
 use serde::Serialize;
 #[cfg(desktop)]
@@ -4772,7 +4772,10 @@ impl SessionManager {
       let mut removed_keys = Vec::new();
       locked.store.accounts.retain(|a| {
         if a.provider_id == pid {
-          removed_keys.push(a.key());
+          removed_keys.push(AccountKey {
+            provider_id: a.provider_id.clone(),
+            uuid: a.uuid.clone(),
+          });
           false
         } else {
           true
@@ -9134,8 +9137,12 @@ impl SessionManager {
     }
   }
 
-  fn is_account_group_eligible(acc: &AccountRecord, now: u64) -> bool {
-    resolve_provider_with_custom(&acc.provider_id, &locked.store.custom_providers).is_some_and(|s| s.info.enabled)
+  fn is_account_group_eligible(
+    acc: &AccountRecord,
+    custom_providers: &[CustomProviderRecord],
+    now: u64,
+  ) -> bool {
+    resolve_provider_with_custom(&acc.provider_id, custom_providers).is_some_and(|s| s.info.enabled)
       && acc.auth_state == AuthState::Authenticated
       && acc.cookie_expires_at_ms.is_none_or(|exp| exp > now)
   }
@@ -9182,7 +9189,9 @@ impl SessionManager {
         return Err(format!("账号「{}」已退出登录，不能加入群聊", acc.alias));
       }
       let already_member = allowed_existing.is_some_and(|ex| ex.contains(&key));
-      if !already_member && !Self::is_account_group_eligible(acc, now) {
+      if !already_member
+        && !Self::is_account_group_eligible(acc, &locked.store.custom_providers, now)
+      {
         return Err(format!(
           "账号「{}」尚未完成有效登录（或登录态已过期）",
           acc.alias
@@ -10042,7 +10051,7 @@ impl SessionManager {
   }
 
   #[cfg_attr(not(desktop), allow(dead_code))]
-  fn channel_display_label_locked(_locked: &InnerState, channel_pid: &ProviderId) -> String {
+  fn channel_display_label_locked(locked: &InnerState, channel_pid: &ProviderId) -> String {
     if channel_pid.is_api() {
       return "OpenAI API".to_string();
     }
