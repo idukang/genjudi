@@ -132,6 +132,8 @@ npm run tauri -- build
 
 ---
 
-## 开源协议
+## 致谢与开源协议
+
+本项目基于 [ldjx7/multi-agent-account-manager](https://github.com/ldjx7/multi-agent-account-manager) 架构学习与二次开发，感谢原作者提供的扎实多账号隔离框架与实现路径。
 
 本项目基于 [Apache-2.0](LICENSE) 协议开源。
