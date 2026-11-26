@@ -44,6 +44,8 @@
     "allow-get-site-adapters",
     "allow-save-site-adapter-overrides",
     "allow-reset-site-adapter-overrides",
+    "allow-export-config-bundle",
+    "allow-import-config-bundle",
     "allow-check-for-updates",
     "allow-download-and-install-update",
     "allow-open-external-url"

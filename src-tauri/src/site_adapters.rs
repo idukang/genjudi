@@ -144,6 +144,233 @@ pub fn builtin_site_adapters() -> Vec<SiteAdapterConfig> {
       async_agent: true,
     },
     SiteAdapterConfig {
+      id: "chatgpt".to_string(),
+      name: "ChatGPT · OpenAI".to_string(),
+      host_patterns: svec(&["chatgpt.com", "*.chatgpt.com", "chat.openai.com"]),
+      composer_selectors: svec(&[
+        "#prompt-textarea",
+        "div.ProseMirror[contenteditable=\"true\"]",
+        "textarea[data-id=\"root\"]",
+        "textarea[placeholder]",
+      ]),
+      send_button_selectors: svec(&[
+        "button[data-testid=\"send-button\"]",
+        "button[aria-label*=\"Send prompt\"]",
+        "button[aria-label*=\"Send\" i]",
+        "button[aria-label*=\"发送\"]",
+      ]),
+      stop_button_selectors: svec(&[
+        "button[data-testid=\"stop-button\"]",
+        "button[aria-label*=\"Stop streaming\" i]",
+        "button[aria-label*=\"停止\"]",
+      ]),
+      message_list_selectors: svec(&[
+        "main div[class*=\"react-scroll-to-bottom\"]",
+        "main[class*=\"relative\"]",
+      ]),
+      assistant_message_selectors: svec(&[
+        "[data-message-author-role=\"assistant\"]",
+        "div[data-message-id][data-message-author-role]",
+      ]),
+      new_chat_selectors: svec(&[
+        "button[data-testid=\"create-new-chat-button\"]",
+        "a[aria-label*=\"New chat\" i]",
+        "a[href=\"/\"]",
+      ]),
+      new_chat_url: Some("https://chatgpt.com/".to_string()),
+      thread_url_patterns: svec(&["/c/"]),
+      transient_status_words: svec(&["Thinking", "Searching the web", "Reading", "思考中", "正在搜索"]),
+      chat_api_patterns: svec(&["/backend-api/conversation", "/backend-api/", "/api/"]),
+      prefer_enter_submit: false,
+      async_agent: true,
+    },
+    SiteAdapterConfig {
+      id: "deepseek".to_string(),
+      name: "DeepSeek".to_string(),
+      host_patterns: svec(&["chat.deepseek.com", "deepseek.com", "*.deepseek.com"]),
+      composer_selectors: svec(&[
+        "textarea#chat-input",
+        "textarea[placeholder*=\"DeepSeek\"]",
+        "textarea[placeholder*=\"给 DeepSeek\"]",
+        "textarea",
+      ]),
+      send_button_selectors: svec(&[
+        "div[data-testid=\"send-button\"]",
+        "button[aria-label*=\"Send\" i]",
+        "button[aria-label*=\"发送\"]",
+        "div[role=\"button\"][aria-disabled]",
+      ]),
+      stop_button_selectors: svec(&[
+        "div[data-testid=\"stop-button\"]",
+        "button[aria-label*=\"Stop\" i]",
+        "button[aria-label*=\"停止\"]",
+      ]),
+      message_list_selectors: svec(&["div[class*=\"chat-container\"]", "main"]),
+      assistant_message_selectors: svec(&[
+        ".ds-markdown",
+        "div[class*=\"ds-markdown\"]",
+        "[data-role=\"assistant\"]",
+      ]),
+      new_chat_selectors: svec(&[
+        "div[role=\"button\"][aria-label*=\"新建\"]",
+        "a[href=\"/\"]",
+      ]),
+      new_chat_url: Some("https://chat.deepseek.com/".to_string()),
+      thread_url_patterns: svec(&["/a/chat/s/", "/chat/s/"]),
+      transient_status_words: svec(&["思考中", "正在搜索", "搜索中", "深度思考中"]),
+      chat_api_patterns: svec(&["/api/v0/chat/completion", "/api/v0/", "/api/"]),
+      prefer_enter_submit: false,
+      async_agent: true,
+    },
+    SiteAdapterConfig {
+      id: "claude".to_string(),
+      name: "Claude · Anthropic".to_string(),
+      host_patterns: svec(&["claude.ai", "*.claude.ai"]),
+      composer_selectors: svec(&[
+        "div.ProseMirror[contenteditable=\"true\"]",
+        "fieldset div[contenteditable=\"true\"]",
+        "div[contenteditable=\"true\"]",
+      ]),
+      send_button_selectors: svec(&[
+        "button[aria-label=\"Send message\"]",
+        "button[aria-label*=\"Send\" i]",
+        "button[aria-label*=\"发送\"]",
+      ]),
+      stop_button_selectors: svec(&[
+        "button[aria-label=\"Stop response\"]",
+        "button[aria-label*=\"Stop\" i]",
+        "button[aria-label*=\"停止\"]",
+      ]),
+      message_list_selectors: svec(&["div[class*=\"conversation\"]", "main"]),
+      assistant_message_selectors: svec(&[
+        "div.font-claude-message",
+        "[data-testid=\"assistant-message\"]",
+        "div[data-is-streaming]",
+      ]),
+      new_chat_selectors: svec(&[
+        "button[aria-label*=\"New chat\" i]",
+        "a[href=\"/new\"]",
+      ]),
+      new_chat_url: Some("https://claude.ai/new".to_string()),
+      thread_url_patterns: svec(&["/chat/"]),
+      transient_status_words: svec(&["Thinking", "Searching", "思考中"]),
+      chat_api_patterns: svec(&["/api/append_message", "/api/organizations/", "/api/"]),
+      prefer_enter_submit: false,
+      async_agent: true,
+    },
+    SiteAdapterConfig {
+      id: "gemini".to_string(),
+      name: "Gemini · Google".to_string(),
+      host_patterns: svec(&["gemini.google.com", "*.gemini.google.com"]),
+      composer_selectors: svec(&[
+        "rich-textarea div.ql-editor[contenteditable=\"true\"]",
+        "div.ql-editor[contenteditable=\"true\"]",
+        "div[contenteditable=\"true\"]",
+      ]),
+      send_button_selectors: svec(&[
+        "button.send-button",
+        "button[aria-label*=\"Send message\" i]",
+        "button[aria-label*=\"发送\"]",
+      ]),
+      stop_button_selectors: svec(&[
+        "button[aria-label*=\"Stop response\" i]",
+        "button.stop",
+        "button[aria-label*=\"停止\"]",
+      ]),
+      message_list_selectors: svec(&["chat-window", "main"]),
+      assistant_message_selectors: svec(&[
+        "model-response message-content",
+        "message-content",
+        ".model-response-text",
+      ]),
+      new_chat_selectors: svec(&[
+        "button[aria-label*=\"New chat\" i]",
+        "a[href=\"/app\"]",
+      ]),
+      new_chat_url: Some("https://gemini.google.com/app".to_string()),
+      thread_url_patterns: svec(&["/app/"]),
+      transient_status_words: svec(&["Thinking", "正在思考", "正在生成"]),
+      chat_api_patterns: svec(&["/_/BardChatUi/data/", "/generate", "/api/"]),
+      prefer_enter_submit: false,
+      async_agent: true,
+    },
+    SiteAdapterConfig {
+      id: "kimi".to_string(),
+      name: "Kimi · Moonshot".to_string(),
+      host_patterns: svec(&[
+        "kimi.com",
+        "www.kimi.com",
+        "*.kimi.com",
+        "kimi.moonshot.cn",
+        "*.moonshot.cn",
+      ]),
+      composer_selectors: svec(&[
+        "div[data-testid=\"msh-chatinput-editor\"]",
+        "div[contenteditable=\"true\"]",
+        "textarea",
+      ]),
+      send_button_selectors: svec(&[
+        "div[data-testid=\"msh-chatinput-send-button\"]",
+        "button[aria-label*=\"发送\"]",
+        "button[aria-label*=\"Send\" i]",
+      ]),
+      stop_button_selectors: svec(&[
+        "div[data-testid=\"msh-chatinput-stop-button\"]",
+        "button[aria-label*=\"停止\"]",
+        "button[aria-label*=\"Stop\" i]",
+      ]),
+      message_list_selectors: svec(&["div[class*=\"chat-content\"]", "main"]),
+      assistant_message_selectors: svec(&[
+        ".markdown-container",
+        "div[class*=\"markdown\"]",
+      ]),
+      new_chat_selectors: svec(&[
+        "div[data-testid=\"msh-chatinput-new-chat\"]",
+        "a[href=\"/\"]",
+      ]),
+      new_chat_url: Some("https://www.kimi.com/".to_string()),
+      thread_url_patterns: svec(&["/chat/"]),
+      transient_status_words: svec(&["思考中", "正在搜索", "搜索中"]),
+      chat_api_patterns: svec(&["/apiv2/", "/api/", "/chat/"]),
+      prefer_enter_submit: false,
+      async_agent: true,
+    },
+    SiteAdapterConfig {
+      id: "grok".to_string(),
+      name: "Grok · xAI".to_string(),
+      host_patterns: svec(&["grok.com", "*.grok.com"]),
+      composer_selectors: svec(&[
+        "textarea[aria-label*=\"Grok\" i]",
+        "div[contenteditable=\"true\"]",
+        "textarea",
+      ]),
+      send_button_selectors: svec(&[
+        "button[aria-label*=\"Submit\" i]",
+        "button[type=\"submit\"]",
+        "button[aria-label*=\"Send\" i]",
+      ]),
+      stop_button_selectors: svec(&[
+        "button[aria-label*=\"Stop\" i]",
+        "button[aria-label*=\"停止\"]",
+      ]),
+      message_list_selectors: svec(&["div[class*=\"conversation\"]", "main"]),
+      assistant_message_selectors: svec(&[
+        "div.message-bubble",
+        "div[class*=\"response-content\"]",
+        "div[data-testid*=\"assistant\" i]",
+      ]),
+      new_chat_selectors: svec(&[
+        "button[aria-label*=\"New\" i]",
+        "a[href=\"/chat\"]",
+      ]),
+      new_chat_url: Some("https://grok.com/".to_string()),
+      thread_url_patterns: svec(&["/chat/", "/c/"]),
+      transient_status_words: svec(&["Thinking", "思考中"]),
+      chat_api_patterns: svec(&["/rest/app-chat/", "/rest/", "/api/"]),
+      prefer_enter_submit: false,
+      async_agent: true,
+    },
+    SiteAdapterConfig {
       id: "generic".to_string(),
       name: "通用适配兜底".to_string(),
       host_patterns: svec(&["*"]),
@@ -607,8 +834,49 @@ mod tests {
     assert_eq!(resolve_adapter_for_host(&dir, "muse.ai").id, "muse");
     assert_eq!(resolve_adapter_for_host(&dir, "sub.muse.ai").id, "muse");
     assert_eq!(resolve_adapter_for_host(&dir, "app.hark.com").id, "hark");
+    assert_eq!(resolve_adapter_for_host(&dir, "chatgpt.com").id, "chatgpt");
+    assert_eq!(resolve_adapter_for_host(&dir, "chat.deepseek.com").id, "deepseek");
+    assert_eq!(resolve_adapter_for_host(&dir, "claude.ai").id, "claude");
+    assert_eq!(resolve_adapter_for_host(&dir, "gemini.google.com").id, "gemini");
+    assert_eq!(resolve_adapter_for_host(&dir, "www.kimi.com").id, "kimi");
+    assert_eq!(resolve_adapter_for_host(&dir, "grok.com").id, "grok");
     assert_eq!(resolve_adapter_for_host(&dir, "unknown.example.org").id, "generic");
     let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn builtin_selectors_are_valid_css() {
+    // 任何无效选择器都会让网页注入脚本抛错，这里做一次静态体检。
+    let adapters = super::builtin_site_adapters();
+    for adapter in adapters {
+      assert!(!adapter.host_patterns.is_empty(), "{} 缺少 host", adapter.id);
+      for selector in adapter
+        .composer_selectors
+        .iter()
+        .chain(adapter.send_button_selectors.iter())
+        .chain(adapter.stop_button_selectors.iter())
+        .chain(adapter.message_list_selectors.iter())
+        .chain(adapter.assistant_message_selectors.iter())
+        .chain(adapter.new_chat_selectors.iter())
+      {
+        assert!(!selector.trim().is_empty(), "{} 存在空选择器", adapter.id);
+        let mut outside_brackets = String::new();
+        let mut depth = 0usize;
+        for ch in selector.chars() {
+          match ch {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => outside_brackets.push(ch),
+            _ => {}
+          }
+        }
+        assert!(
+          !outside_brackets.contains('*'),
+          "{} 选择器在属性选择器以外出现通配符: {selector}",
+          adapter.id
+        );
+      }
+    }
   }
 
   #[test]
