@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-manager-state"
+description = "Enables the get_manager_state command without any pre-configured scope."
+commands.allow = ["get_manager_state"]
+
+[[permission]]
+identifier = "deny-get-manager-state"
+description = "Denies the get_manager_state command without any pre-configured scope."
+commands.deny = ["get_manager_state"]

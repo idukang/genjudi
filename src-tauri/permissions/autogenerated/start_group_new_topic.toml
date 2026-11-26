@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-group-new-topic"
+description = "Enables the start_group_new_topic command without any pre-configured scope."
+commands.allow = ["start_group_new_topic"]
+
+[[permission]]
+identifier = "deny-start-group-new-topic"
+description = "Denies the start_group_new_topic command without any pre-configured scope."
+commands.deny = ["start_group_new_topic"]

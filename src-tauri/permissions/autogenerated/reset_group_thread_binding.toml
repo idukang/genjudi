@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reset-group-thread-binding"
+description = "Enables the reset_group_thread_binding command without any pre-configured scope."
+commands.allow = ["reset_group_thread_binding"]
+
+[[permission]]
+identifier = "deny-reset-group-thread-binding"
+description = "Denies the reset_group_thread_binding command without any pre-configured scope."
+commands.deny = ["reset_group_thread_binding"]

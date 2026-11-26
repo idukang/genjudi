@@ -1,0 +1,44 @@
+[package]
+name = "multi-agent-account-manager"
+version = "0.1.10"
+edition = "2021"
+rust-version = "1.85"
+
+[lib]
+name = "multi_agent_account_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.5", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.6", features = [] }
+tauri-plugin-account-session = { path = "plugins/account-session" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "=2.12.6", features = ["unstable", "tray-icon", "image-png"] }
+tauri-plugin-global-shortcut = "2.3.2"
+open = "5"
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2", "system-proxy"] }
+sha2 = "0.10"
+
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+arboard = { version = "3.6.1", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDate", "NSError", "NSHTTPCookie", "NSString", "NSUUID", "block2"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSView", "NSResponder"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["objc2-app-kit", "WKHTTPCookieStore", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "block2"] }
+
+[target.'cfg(windows)'.dependencies]
+tauri-runtime = "=2.12.3"
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_System_Com", "Win32_System_Registry"] }
+wry = { version = "=0.57.2", default-features = false }

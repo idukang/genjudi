@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-remove-custom-provider"
+description = "Enables the remove_custom_provider command without any pre-configured scope."
+commands.allow = ["remove_custom_provider"]
+
+[[permission]]
+identifier = "deny-remove-custom-provider"
+description = "Denies the remove_custom_provider command without any pre-configured scope."
+commands.deny = ["remove_custom_provider"]

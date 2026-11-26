@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-custom-provider"
+description = "Enables the update_custom_provider command without any pre-configured scope."
+commands.allow = ["update_custom_provider"]
+
+[[permission]]
+identifier = "deny-update-custom-provider"
+description = "Denies the update_custom_provider command without any pre-configured scope."
+commands.deny = ["update_custom_provider"]

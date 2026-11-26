@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-retry-group-message"
+description = "Enables the retry_group_message command without any pre-configured scope."
+commands.allow = ["retry_group_message"]
+
+[[permission]]
+identifier = "deny-retry-group-message"
+description = "Denies the retry_group_message command without any pre-configured scope."
+commands.deny = ["retry_group_message"]

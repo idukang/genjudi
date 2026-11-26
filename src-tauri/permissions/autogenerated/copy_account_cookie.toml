@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-copy-account-cookie"
+description = "Enables the copy_account_cookie command without any pre-configured scope."
+commands.allow = ["copy_account_cookie"]
+
+[[permission]]
+identifier = "deny-copy-account-cookie"
+description = "Denies the copy_account_cookie command without any pre-configured scope."
+commands.deny = ["copy_account_cookie"]

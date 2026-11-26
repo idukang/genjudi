@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sync-group-message-reply"
+description = "Enables the sync_group_message_reply command without any pre-configured scope."
+commands.allow = ["sync_group_message_reply"]
+
+[[permission]]
+identifier = "deny-sync-group-message-reply"
+description = "Denies the sync_group_message_reply command without any pre-configured scope."
+commands.deny = ["sync_group_message_reply"]

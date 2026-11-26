@@ -1,0 +1,6 @@
+{
+  "build": {
+    "beforeDevCommand": "node scripts/sync-android-resources.mjs && npm run dev",
+    "beforeBuildCommand": "node scripts/sync-android-resources.mjs && npm run build"
+  }
+}
