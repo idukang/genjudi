@@ -101,6 +101,16 @@ type ModalMode =
       error?: string;
       saving?: boolean;
     }
+  | {
+      kind: "custom-provider";
+      editingProviderId: string | null;
+      nameDraft: string;
+      entryUrlDraft: string;
+      extraHostsDraft: string;
+      confirmDelete?: boolean;
+      error?: string;
+      saving?: boolean;
+    }
   | { kind: "update" };
 
 type ProviderLogoSpec = { src: string; fullBleed: boolean; monoDark?: boolean };
@@ -109,6 +119,19 @@ const PROVIDER_LOGOS: Record<string, ProviderLogoSpec> = {
   muse: { src: "/logos/muse.png", fullBleed: true },
   hark: { src: "/logos/hark.svg", fullBleed: false, monoDark: true },
 };
+
+const CUSTOM_PROVIDER_PRESETS: Array<{
+  name: string;
+  entryUrl: string;
+  extraHosts?: string;
+}> = [
+  { name: "DeepSeek", entryUrl: "https://chat.deepseek.com/", extraHosts: "deepseek.com" },
+  { name: "ChatGPT", entryUrl: "https://chatgpt.com/", extraHosts: "auth.openai.com, openai.com" },
+  { name: "Claude", entryUrl: "https://claude.ai/" },
+  { name: "Gemini", entryUrl: "https://gemini.google.com/", extraHosts: "aistudio.google.com" },
+  { name: "Kimi", entryUrl: "https://www.kimi.com/", extraHosts: "kimi.moonshot.cn" },
+  { name: "Grok", entryUrl: "https://grok.com/", extraHosts: "accounts.x.ai, x.ai" },
+];
 
 const GROUP_SKILL_PRESETS: Array<Omit<GroupSharedSkill, "id" | "enabled">> = [
   {
@@ -1150,6 +1173,10 @@ async function callCommand(
         modal.kind === "group-knowledge") ||
       ((cmd === "upsert_external_agent" || cmd === "delete_external_agent") &&
         modal.kind === "external-agents") ||
+      ((cmd === "add_custom_provider" ||
+        cmd === "update_custom_provider" ||
+        cmd === "remove_custom_provider") &&
+        modal.kind === "custom-provider") ||
       (cmd === "update_app_settings" && modal.kind === "settings")
     ) {
       modal.error = String(err);
@@ -1813,6 +1840,50 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
       </div>
     `;
   }
+  if (modal.kind === "custom-provider") {
+    const cModal = modal;
+    const saving = Boolean(cModal.saving);
+    const isEdit = Boolean(cModal.editingProviderId);
+    return `
+      <div class="${modalOverlayClass()}" role="dialog" aria-modal="true">
+        <div class="modal-card modal-wide">
+          <div class="modal-title">${isEdit ? "编辑自定义 AI 服务" : "新增 AI 网页服务"}</div>
+          <div class="modal-desc">自由接入任意 HTTPS 网页版 AI（每个账号均享独立容器隔离、Cookie 导入与独立代理）。</div>
+          ${
+            !isEdit
+              ? `
+            <div class="modal-field-label">快捷预设（点击一键填入）</div>
+            <div class="preset-chip-row" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+              ${CUSTOM_PROVIDER_PRESETS.map(
+                (preset, idx) =>
+                  `<button class="mini-btn" data-custom-provider-preset="${idx}" type="button" ${saving ? "disabled" : ""}>${escapeHtml(preset.name)}</button>`
+              ).join("")}
+            </div>
+          `
+              : ""
+          }
+          <label class="modal-field-label" for="modal-custom-provider-name">服务名称</label>
+          <input id="modal-custom-provider-name" class="modal-input" maxlength="40" placeholder="例如 DeepSeek、ChatGPT、Claude" value="${escapeHtml(cModal.nameDraft)}" ${saving ? "disabled" : ""} />
+          <label class="modal-field-label" for="modal-custom-provider-url">入口网址（HTTPS）</label>
+          <input id="modal-custom-provider-url" class="modal-input" maxlength="300" placeholder="https://chat.deepseek.com/" value="${escapeHtml(cModal.entryUrlDraft)}" autocomplete="off" spellcheck="false" ${saving ? "disabled" : ""} />
+          <label class="modal-field-label" for="modal-custom-provider-hosts">额外放行域名（可选，逗号分隔，用于登录跳转域）</label>
+          <input id="modal-custom-provider-hosts" class="modal-input" maxlength="300" placeholder="例如 auth.openai.com, deepseek.com" value="${escapeHtml(cModal.extraHostsDraft)}" autocomplete="off" spellcheck="false" ${saving ? "disabled" : ""} />
+          ${cModal.error ? `<div id="modal-error-box" class="update-error-box" role="alert">${escapeHtml(cModal.error)}</div>` : ""}
+          <div class="modal-footer" style="justify-content:space-between;">
+            ${
+              isEdit
+                ? `<button id="modal-delete-custom-provider-btn" class="btn danger" type="button" ${saving ? "disabled" : ""}>${cModal.confirmDelete ? "确认删除服务及账号" : "删除此服务"}</button>`
+                : `<span></span>`
+            }
+            <div style="display:flex;gap:8px;">
+              <button id="modal-cancel-btn" class="btn" type="button" ${saving ? "disabled" : ""}>取消</button>
+              <button id="modal-confirm-btn" class="btn primary" type="button" ${saving ? "disabled" : ""}>${saving ? "保存中..." : isEdit ? "保存修改" : "添加服务"}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
   if (modal.kind === "delete-group") {
     return `
       <div class="${modalOverlayClass()}" role="dialog" aria-modal="true">
@@ -1889,6 +1960,7 @@ function renderMiddleContent(state: ManagerSnapshot, provider: ProviderInfo): st
       ${mobileThemeBtn}
       ${mobileUpdateBtn}
       ${!isMobile ? `<button id="sync-all-btn" class="ghost-icon-btn" type="button" title="刷新已就绪账号额度">${ICON_REFRESH}</button>` : ""}
+      ${provider.isCustom ? `<button id="edit-custom-provider-btn" class="ghost-icon-btn" type="button" title="编辑或删除「${escapeHtml(provider.shortName)}」服务">${ICON_EDIT}</button>` : ""}
       <button id="open-site-btn" class="ghost-icon-btn" type="button" title="在浏览器中打开 ${escapeHtml(provider.shortName)} 官网">${ICON_EXTERNAL}</button>
       <button id="add-account-btn" class="icon-btn primary" type="button">+ 新增</button>
     `
@@ -2935,6 +3007,9 @@ function render(): void {
     "modal-skill-desc-input",
     "modal-skill-content-input",
     "modal-adapters-json-input",
+    "modal-custom-provider-name",
+    "modal-custom-provider-url",
+    "modal-custom-provider-hosts",
     "ext-agent-name-input",
     "ext-agent-url-input",
     "ext-agent-key-input",
@@ -2974,6 +3049,9 @@ function render(): void {
             `
             )
             .join("")}
+          <button id="add-custom-provider-btn" class="mobile-tab" type="button" title="新增自定义 AI 服务">
+            <span>+ 服务</span>
+          </button>
         </div>
         <div class="middle-column" style="width:100%;min-width:0;flex:1;border-right:none;">
           ${renderMiddleContent(snapshot, provider)}
@@ -3005,6 +3083,10 @@ function render(): void {
               `
               )
               .join("")}
+            <button id="add-custom-provider-btn" class="rail-btn" title="自由新增 AI 网页服务" type="button">
+              <div class="rail-logo-box"><span class="group-provider-tag">+</span></div>
+              <span class="rail-label">加服务</span>
+            </button>
           </div>
           <div class="rail-footer">
             <button
@@ -4774,6 +4856,86 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     await setModal({ kind: "none" });
   });
 
+  document.querySelector("#add-custom-provider-btn")?.addEventListener("click", async () => {
+    await setModal({
+      kind: "custom-provider",
+      editingProviderId: null,
+      nameDraft: "",
+      entryUrlDraft: "",
+      extraHostsDraft: "",
+    });
+  });
+
+  document.querySelector("#edit-custom-provider-btn")?.addEventListener("click", async () => {
+    if (!provider.isCustom) return;
+    await setModal({
+      kind: "custom-provider",
+      editingProviderId: provider.id,
+      nameDraft: provider.name,
+      entryUrlDraft: provider.entryUrl,
+      extraHostsDraft: "",
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>("[data-custom-provider-preset]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (modal.kind !== "custom-provider" || modal.saving) return;
+      const idx = Number(btn.dataset.customProviderPreset);
+      const preset = CUSTOM_PROVIDER_PRESETS[idx];
+      if (!preset) return;
+      modal.nameDraft = preset.name;
+      modal.entryUrlDraft = preset.entryUrl;
+      modal.extraHostsDraft = preset.extraHosts ?? "";
+      modal.error = undefined;
+      render();
+    });
+  });
+
+  document.querySelector("#modal-custom-provider-name")?.addEventListener("input", (e) => {
+    if (modal.kind === "custom-provider") {
+      modal.nameDraft = (e.target as HTMLInputElement).value;
+    }
+  });
+  document.querySelector("#modal-custom-provider-url")?.addEventListener("input", (e) => {
+    if (modal.kind === "custom-provider") {
+      modal.entryUrlDraft = (e.target as HTMLInputElement).value;
+    }
+  });
+  document.querySelector("#modal-custom-provider-hosts")?.addEventListener("input", (e) => {
+    if (modal.kind === "custom-provider") {
+      modal.extraHostsDraft = (e.target as HTMLInputElement).value;
+    }
+  });
+
+  document.querySelector("#modal-delete-custom-provider-btn")?.addEventListener("click", async () => {
+    if (modal.kind !== "custom-provider" || !modal.editingProviderId || modal.saving) return;
+    if (!modal.confirmDelete) {
+      modal.confirmDelete = true;
+      modal.error = "再次点击「确认删除服务及账号」将彻底删除该服务及其下所有账号和本地会话。";
+      render();
+      return;
+    }
+    const currentModal = modal;
+    currentModal.saving = true;
+    currentModal.error = undefined;
+    render();
+    let removed = false;
+    try {
+      viewMode = "provider";
+      removed = await callCommand("remove_custom_provider", {
+        providerId: currentModal.editingProviderId,
+      });
+    } finally {
+      currentModal.saving = false;
+      if (modal === currentModal && !removed) {
+        render();
+      }
+    }
+    if (removed && modal === currentModal) {
+      await setModal({ kind: "none" });
+    }
+  });
+
   document.querySelector("#modal-confirm-btn")?.addEventListener("click", async () => {
     const currentModal = modal;
     if (currentModal.kind === "add" || currentModal.kind === "rename") {
@@ -4853,6 +5015,39 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
             members: currentModal.selectedMembers,
           });
         }
+      } finally {
+        currentModal.saving = false;
+        if (modal === currentModal && !saved) {
+          render();
+        }
+      }
+      if (saved && modal === currentModal) {
+        await setModal({ kind: "none" });
+      }
+    } else if (currentModal.kind === "custom-provider") {
+      if (currentModal.saving) return;
+      const extraHosts = currentModal.extraHostsDraft
+        .split(/[,，\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      currentModal.error = undefined;
+      currentModal.saving = true;
+      render();
+      let saved = false;
+      try {
+        viewMode = "provider";
+        saved = currentModal.editingProviderId
+          ? await callCommand("update_custom_provider", {
+              providerId: currentModal.editingProviderId,
+              name: currentModal.nameDraft.trim(),
+              entryUrl: currentModal.entryUrlDraft.trim(),
+              extraHosts,
+            })
+          : await callCommand("add_custom_provider", {
+              name: currentModal.nameDraft.trim(),
+              entryUrl: currentModal.entryUrlDraft.trim(),
+              extraHosts,
+            });
       } finally {
         currentModal.saving = false;
         if (modal === currentModal && !saved) {

@@ -12,6 +12,7 @@ export interface ProviderInfo {
   name: string;
   shortName: string;
   enabled: boolean;
+  isCustom?: boolean;
   statusText: string;
   entryUrl: string;
   homepageUrl: string;

@@ -6,6 +6,7 @@
 
 | 服务 | 状态 | 说明 |
 | --- | --- | --- |
+| **自定义 AI 网页服务** | 已启用 | 自由新增、编辑、删除任意 HTTPS AI 服务（内置 DeepSeek / ChatGPT / Claude / Gemini / Kimi / Grok 一键预设） |
 | **Muse · Meta** | 已启用 | 独立会话隔离、邮箱识别、额度明细与额外额度同步、Space 预览 |
 | **Hark** | 已启用 | 独立会话隔离、邮箱识别、每日/每月双上限额度同步 |
 | **外部 API / CLI Agent** | 群聊可用（桌面端） | 支持接入 OpenAI 兼容 API 与本地 CLI 工具参与混合群聊 |
@@ -42,43 +43,8 @@
 1. **两种 Cookie 导入方式的区别（Muse · Meta）**：
    - **仅导入 `muse.ai` 的 Cookie**（如复制 `Cookie:` 请求头或仅导出 `muse.ai` 单域）：可以**正常登录使用 Muse 对话、Space 与同步额度**；但由于 `muse.ai` 页面本身不返回邮箱且缺少 `.meta.com` 凭据，**无法自动识别邮箱**（Muse 设置里点「Meta 账户」也会处于未登录状态）。此时账号会显示为「已登录账号」，可在新增时填写备注名，或点击卡片下方的 **「手动改名」** 自行命名。
    - **同时导入 `muse.ai` + `meta.com` 的 Cookie（推荐）**：不仅能正常使用 Muse，应用还会**自动从 Meta 账户中心（`accountscenter.meta.com`）识别并更新真实邮箱**，点开「Meta 账户」也会保持已登录状态。
-2. **多域名 Cookie 导出方法**：推荐使用 Chrome 插件 **Get cookies.txt LOCALLY**，点击 **Export All Cookies**（或在 `muse.ai` 与 `accountscenter.meta.com` 页面分别点右上角 **Copy** 后上下拼接）得到 Netscape `cookies.txt` 或 JSON 数组后直接粘贴；应用会自动过滤，只导入当前服务允许域名（`.muse.ai`、`.meta.com` 等）的 Cookie，无需担心混入其他网站。
+2. **多域名 Cookie 导出方法**：可将 Netscape `cookies.txt`、JSON 数组或 HTTP `Cookie:` 请求头直接粘贴；应用会自动过滤，只导入当前服务允许域名的 Cookie，无需担心混入其他网站。
 3. **导入操作入口**：点击服务栏右上角 **「+ 新增」**，在 **「导入 Cookie（可选）」** 中粘贴后点击 **「创建并打开」** 即可直接进入已登录状态；也可在已有账号的 **「账号设置（编辑图标）」** 中粘贴并点击 **「导入 Cookie」** 覆盖更新。
-
----
-
-## 界面预览
-
-### 核心功能（桌面端）
-
-<p align="center">
-  <img src="docs/screenshots/desktop-group-chat.png" alt="多账号群聊协作（A2A 接力与外部 Agent）" width="32%" />
-  <img src="docs/screenshots/desktop-cookie-import.png" alt="新增账号直接导入 Cookie" width="32%" />
-  <img src="docs/screenshots/desktop-auto-approve-settings.png" alt="桌面端设置与工具权限自动审批" width="32%" />
-</p>
-
-### macOS
-
-<p align="center">
-  <img src="docs/screenshots/macos-muse.png" alt="macOS Muse 多账号管理与额度同步" width="49%" />
-  <img src="docs/screenshots/macos-hark.png" alt="macOS Hark 账号与双上限额度" width="49%" />
-</p>
-
-### Windows
-
-<p align="center">
-  <img src="docs/screenshots/windows-muse.png" alt="Windows Muse 多账号管理与额度同步" width="49%" />
-  <img src="docs/screenshots/windows-hark.png" alt="Windows Hark 账号与双上限额度" width="49%" />
-</p>
-
-### Android
-
-<p align="center">
-  <img src="docs/screenshots/android-muse-accounts.png" alt="Android Muse 多账号与额度" width="210" />
-  <img src="docs/screenshots/android-hark-accounts.png" alt="Android Hark 账号与双上限额度" width="210" />
-  <img src="docs/screenshots/android-muse-chat.png" alt="Android 独立会话隔离界面" width="210" />
-  <img src="docs/screenshots/android-update-modal.png" alt="Android 应用内检查更新" width="210" />
-</p>
 
 ---
 

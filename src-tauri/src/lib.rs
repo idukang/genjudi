@@ -526,6 +526,54 @@ async fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
   updater::open_external_url(&app, &url).await
 }
 
+#[tauri::command]
+async fn add_custom_provider(
+  app: AppHandle,
+  mgr: State<'_, Arc<SessionManager>>,
+  webview: tauri::Webview,
+  name: String,
+  entry_url: String,
+  extra_hosts: Option<Vec<String>>,
+) -> Result<ManagerSnapshot, String> {
+  if webview.label() != "manager" {
+    return Err("仅账号管理页可以新增服务".to_string());
+  }
+  mgr
+    .add_custom_provider(&app, &name, &entry_url, extra_hosts)
+    .await
+}
+
+#[tauri::command]
+async fn update_custom_provider(
+  app: AppHandle,
+  mgr: State<'_, Arc<SessionManager>>,
+  webview: tauri::Webview,
+  provider_id: String,
+  name: String,
+  entry_url: String,
+  extra_hosts: Option<Vec<String>>,
+) -> Result<ManagerSnapshot, String> {
+  if webview.label() != "manager" {
+    return Err("仅账号管理页可以修改服务".to_string());
+  }
+  mgr
+    .update_custom_provider(&app, &provider_id, &name, &entry_url, extra_hosts)
+    .await
+}
+
+#[tauri::command]
+async fn remove_custom_provider(
+  app: AppHandle,
+  mgr: State<'_, Arc<SessionManager>>,
+  webview: tauri::Webview,
+  provider_id: String,
+) -> Result<ManagerSnapshot, String> {
+  if webview.label() != "manager" {
+    return Err("仅账号管理页可以删除服务".to_string());
+  }
+  mgr.remove_custom_provider(&app, &provider_id).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   let builder = tauri::Builder::default();
@@ -694,6 +742,9 @@ pub fn run() {
       check_for_updates,
       download_and_install_update,
       open_external_url,
+      add_custom_provider,
+      update_custom_provider,
+      remove_custom_provider,
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")

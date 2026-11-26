@@ -267,11 +267,25 @@ pub struct GroupChatRecord {
   pub thread_bindings: Vec<GroupThreadBinding>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomProviderRecord {
+  pub id: ProviderId,
+  pub name: String,
+  pub entry_url: String,
+  #[serde(default)]
+  pub extra_hosts: Vec<String>,
+  #[serde(default)]
+  pub created_at_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountsStoreFile {
   pub version: u32,
   pub accounts: Vec<AccountRecord>,
+  #[serde(default)]
+  pub custom_providers: Vec<CustomProviderRecord>,
   pub last_committed: Option<AccountKey>,
   pub pending_cleanup: Vec<AccountKey>,
   #[serde(default)]
@@ -287,6 +301,7 @@ impl Default for AccountsStoreFile {
     Self {
       version: STORE_VERSION,
       accounts: Vec::new(),
+      custom_providers: Vec::new(),
       last_committed: None,
       pending_cleanup: Vec::new(),
       group_chats: Vec::new(),
@@ -370,12 +385,66 @@ fn migrate_from_value(root: Value) -> Result<(AccountsStoreFile, bool), String> 
   let mut dirty = file_version < STORE_VERSION;
   let is_legacy = dirty;
 
-  if let Some(v) = obj
+  let mut custom_providers = Vec::new();
+  let mut custom_provider_ids: HashSet<ProviderId> = HashSet::new();
+  if let Some(arr) = obj
     .get("customProviders")
     .or_else(|| obj.get("custom_providers"))
+    .and_then(|v| v.as_array())
   {
-    if !v.is_null() {
-      dirty = true;
+    for item in arr {
+      let Some(item_obj) = item.as_object() else {
+        dirty = true;
+        continue;
+      };
+      let Some(pid) = item_obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .and_then(ProviderId::parse)
+        .filter(|id| id.is_custom())
+      else {
+        dirty = true;
+        continue;
+      };
+      let name = item_obj
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+      let entry_url = item_obj
+        .get("entryUrl")
+        .or_else(|| item_obj.get("entry_url"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+      if name.is_empty() || !entry_url.starts_with("https://") || !custom_provider_ids.insert(pid.clone()) {
+        dirty = true;
+        continue;
+      }
+      let extra_hosts = item_obj
+        .get("extraHosts")
+        .or_else(|| item_obj.get("extra_hosts"))
+        .and_then(|v| v.as_array())
+        .map(|hosts| {
+          hosts
+            .iter()
+            .filter_map(|h| h.as_str().map(|s| s.trim().to_ascii_lowercase()))
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+      let created_at_ms = item_obj
+        .get("createdAtMs")
+        .or_else(|| item_obj.get("created_at_ms"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or_else(now_ms);
+      custom_providers.push(CustomProviderRecord {
+        id: pid,
+        name,
+        entry_url,
+        extra_hosts,
+        created_at_ms,
+      });
     }
   }
 
@@ -395,16 +464,16 @@ fn migrate_from_value(root: Value) -> Result<(AccountsStoreFile, bool), String> 
       let provider_id = match item_obj.get("providerId").or_else(|| item_obj.get("provider_id")) {
         Some(v) => {
           let s = v.as_str().ok_or_else(|| "providerId 非法".to_string())?;
-          if s.trim().to_ascii_lowercase().starts_with("custom-") {
-            dirty = true;
-            continue;
+          if let Some(parsed) = ProviderId::parse(s) {
+            parsed
+          } else {
+            return Err(format!("未知服务标识: {s}"));
           }
-          ProviderId::parse(s).ok_or_else(|| format!("未知服务标识: {s}"))?
         }
         None if is_legacy => ProviderId::muse(),
         None => return Err("新版配置账号缺少 providerId".to_string()),
       };
-      if !provider_id.is_builtin() {
+      if !provider_id.is_builtin() && !custom_provider_ids.contains(&provider_id) {
         dirty = true;
         continue;
       }
@@ -516,7 +585,7 @@ fn migrate_from_value(root: Value) -> Result<(AccountsStoreFile, bool), String> 
     .filter(|v| !v.is_null());
   let last_committed = last_committed_raw
     .and_then(parse_key_or_legacy_muse)
-    .filter(|k| k.provider_id.is_builtin());
+    .filter(|k| k.provider_id.is_builtin() || custom_provider_ids.contains(&k.provider_id));
   if last_committed_raw.is_some() && last_committed.is_none() {
     dirty = true;
   }
@@ -528,7 +597,9 @@ fn migrate_from_value(root: Value) -> Result<(AccountsStoreFile, bool), String> 
     .and_then(|v| v.as_array())
   {
     for v in arr {
-      if let Some(key) = parse_key_or_legacy_muse(v).filter(|k| k.provider_id.is_builtin()) {
+      if let Some(key) = parse_key_or_legacy_muse(v)
+        .filter(|k| k.provider_id.is_builtin() || custom_provider_ids.contains(&k.provider_id))
+      {
         if !pending_cleanup.contains(&key) {
           pending_cleanup.push(key);
         }
@@ -1032,6 +1103,7 @@ fn migrate_from_value(root: Value) -> Result<(AccountsStoreFile, bool), String> 
     AccountsStoreFile {
       version: STORE_VERSION,
       accounts,
+      custom_providers,
       last_committed,
       pending_cleanup,
       group_chats,
@@ -1224,11 +1296,17 @@ mod tests {
       ]
     });
 
-    let (store, dirty) = migrate_from_value(raw).expect("legacy custom provider store should migrate cleanly");
+    let (store, dirty) = migrate_from_value(raw).expect("custom provider store should migrate cleanly");
     assert!(dirty);
-    assert!(store.last_committed.is_none());
-    assert_eq!(store.accounts.len(), 1);
+    assert_eq!(store.custom_providers.len(), 1);
+    assert_eq!(store.custom_providers[0].name, "Gemini");
+    assert_eq!(
+      store.last_committed.as_ref().map(|k| k.provider_id.as_str()),
+      Some("custom-abcd1234")
+    );
+    assert_eq!(store.accounts.len(), 2);
     assert_eq!(store.accounts[0].alias, "m1");
+    assert_eq!(store.accounts[1].alias, "gemini1");
     assert!(!store.settings.minimize_to_tray);
     assert_eq!(store.settings.global_shortcut, "Alt+Space");
   }

@@ -3,7 +3,7 @@ use crate::group_transport;
 use crate::group_transport::ResolvedMemberTransport;
 use crate::platform::{self, current_platform_name, ProxyTestResult};
 use crate::providers::{
-  all_provider_infos, classify_top_level_url, resolve_provider, NavigationDecision, ProviderId,
+  all_provider_infos_with_custom, classify_top_level_url, resolve_provider_with_custom, NavigationDecision, ProviderId,
   ProviderInfo,
 };
 #[cfg(desktop)]
@@ -3983,7 +3983,7 @@ impl SessionManager {
       .as_ref()
       .map(|k| k.provider_id.clone())
       .filter(|pid| {
-        resolve_provider(pid).is_some_and(|spec| spec.info.enabled)
+        resolve_provider_with_custom(pid, &loaded.store.custom_providers).is_some_and(|spec| spec.info.enabled)
       })
       .unwrap_or_else(ProviderId::muse);
 
@@ -4098,7 +4098,7 @@ impl SessionManager {
     #[cfg(not(desktop))]
     let warm_accounts = Vec::new();
 
-    let providers = all_provider_infos();
+    let providers = all_provider_infos_with_custom(&locked.store.custom_providers);
     let account_errors = locked
       .account_page_errors
       .iter()
@@ -4221,7 +4221,7 @@ impl SessionManager {
           .accounts
           .iter()
           .any(|a| a.provider_id == key.provider_id && a.uuid == key.uuid);
-        let enabled = resolve_provider(&key.provider_id)
+        let enabled = resolve_provider_with_custom(&key.provider_id, &locked.store.custom_providers)
           .is_some_and(|spec| spec.info.enabled);
         if in_cleanup || !exists {
           locked.store.last_committed = None;
@@ -4631,6 +4631,196 @@ impl SessionManager {
     Self::apply_desktop_layout_locked(app, &locked);
   }
 
+  fn normalize_custom_provider_input(
+    raw_name: &str,
+    raw_entry_url: &str,
+    raw_extra_hosts: Option<Vec<String>>,
+  ) -> Result<(String, String, Vec<String>), String> {
+    let name = raw_name.trim().to_string();
+    if name.is_empty() {
+      return Err("请输入服务名称".to_string());
+    }
+    if name.chars().count() > 40 {
+      return Err("服务名称不能超过 40 个字符".to_string());
+    }
+    let mut url_str = raw_entry_url.trim().to_string();
+    if url_str.is_empty() {
+      return Err("请输入服务入口网址".to_string());
+    }
+    if !url_str.contains("://") {
+      url_str = format!("https://{url_str}");
+    }
+    let parsed = Url::parse(&url_str).map_err(|_| "入口网址格式无效".to_string())?;
+    if parsed.scheme() != "https" || parsed.host_str().is_none() {
+      return Err("入口网址必须使用 https:// 协议".to_string());
+    }
+    let mut extra_hosts = Vec::new();
+    if let Some(items) = raw_extra_hosts {
+      for item in items {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+          continue;
+        }
+        let host_candidate = if trimmed.contains("://") {
+          Url::parse(trimmed)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_default()
+        } else {
+          trimmed
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .trim_start_matches("*.")
+            .to_string()
+        };
+        let lower = host_candidate.trim().to_ascii_lowercase();
+        if !lower.is_empty() && lower.contains('.') && !extra_hosts.contains(&lower) {
+          extra_hosts.push(lower);
+        }
+      }
+    }
+    Ok((name, parsed.to_string(), extra_hosts))
+  }
+
+  pub async fn add_custom_provider(
+    self: &Arc<Self>,
+    app: &AppHandle,
+    raw_name: &str,
+    raw_entry_url: &str,
+    raw_extra_hosts: Option<Vec<String>>,
+  ) -> Result<ManagerSnapshot, String> {
+    let (name, entry_url, extra_hosts) =
+      Self::normalize_custom_provider_input(raw_name, raw_entry_url, raw_extra_hosts)?;
+    let short_id = &Uuid::new_v4().simple().to_string()[..12];
+    let pid = ProviderId::parse(&format!("custom-{short_id}"))
+      .ok_or_else(|| "生成自定义服务标识失败".to_string())?;
+    let next_seq = self.current_seq.fetch_add(1, Ordering::SeqCst) + 1;
+
+    let snap = {
+      let mut locked = self.inner.lock().await;
+      if locked.store.custom_providers.len() >= 30 {
+        return Err("自定义服务数量已达上限（30 个）".to_string());
+      }
+      locked.store.custom_providers.push(CustomProviderRecord {
+        id: pid.clone(),
+        name,
+        entry_url,
+        extra_hosts,
+        created_at_ms: now_ms(),
+      });
+      locked.active_group_id = None;
+      locked.selected_provider_id = pid;
+      #[cfg(desktop)]
+      self.hide_foreground_slot(app, next_seq, &mut locked).await;
+      save_store_atomic(&locked.store_path, &locked.store)?;
+      Self::snapshot_from_locked(&locked)
+    };
+    self.emit_snapshot(app, &snap);
+    Ok(snap)
+  }
+
+  pub async fn update_custom_provider(
+    self: &Arc<Self>,
+    app: &AppHandle,
+    raw_provider: &str,
+    raw_name: &str,
+    raw_entry_url: &str,
+    raw_extra_hosts: Option<Vec<String>>,
+  ) -> Result<ManagerSnapshot, String> {
+    let pid = ProviderId::parse(raw_provider)
+      .filter(|id| id.is_custom())
+      .ok_or_else(|| "仅支持编辑自定义服务".to_string())?;
+    let (name, entry_url, extra_hosts) =
+      Self::normalize_custom_provider_input(raw_name, raw_entry_url, raw_extra_hosts)?;
+
+    let snap = {
+      let mut locked = self.inner.lock().await;
+      let rec = locked
+        .store
+        .custom_providers
+        .iter_mut()
+        .find(|p| p.id == pid)
+        .ok_or_else(|| "未找到对应的自定义服务".to_string())?;
+      rec.name = name;
+      rec.entry_url = entry_url;
+      rec.extra_hosts = extra_hosts;
+      save_store_atomic(&locked.store_path, &locked.store)?;
+      Self::snapshot_from_locked(&locked)
+    };
+    self.emit_snapshot(app, &snap);
+    Ok(snap)
+  }
+
+  pub async fn remove_custom_provider(
+    self: &Arc<Self>,
+    app: &AppHandle,
+    raw_provider: &str,
+  ) -> Result<ManagerSnapshot, String> {
+    let pid = ProviderId::parse(raw_provider)
+      .filter(|id| id.is_custom())
+      .ok_or_else(|| "仅支持删除自定义服务".to_string())?;
+    let next_seq = self.current_seq.fetch_add(1, Ordering::SeqCst) + 1;
+
+    let (removed_keys, snap) = {
+      let mut locked = self.inner.lock().await;
+      let before_len = locked.store.custom_providers.len();
+      locked.store.custom_providers.retain(|p| p.id != pid);
+      if locked.store.custom_providers.len() == before_len {
+        return Err("未找到对应的自定义服务".to_string());
+      }
+      let mut removed_keys = Vec::new();
+      locked.store.accounts.retain(|a| {
+        if a.provider_id == pid {
+          removed_keys.push(a.key());
+          false
+        } else {
+          true
+        }
+      });
+      if locked
+        .store
+        .last_committed
+        .as_ref()
+        .is_some_and(|k| k.provider_id == pid)
+      {
+        locked.store.last_committed = None;
+      }
+      locked.store.pending_cleanup.retain(|k| k.provider_id != pid);
+      locked.last_active_per_provider.remove(&pid);
+      for g in &mut locked.store.group_chats {
+        g.members.retain(|k| k.provider_id != pid);
+        g.member_roles.retain(|r| r.member.provider_id != pid);
+        g.thread_bindings.retain(|tb| tb.member.provider_id != pid);
+      }
+      if locked.selected_provider_id == pid {
+        locked.selected_provider_id = ProviderId::muse();
+      }
+      #[cfg(desktop)]
+      {
+        self.hide_foreground_slot(app, next_seq, &mut locked).await;
+        for key in &removed_keys {
+          if let Some(entry) = locked.warm_pool.remove(key) {
+            Self::close_warm_entry(app, entry);
+          }
+          locked.account_page_errors.remove(key);
+          locked.cookie_identity_hints.remove(key);
+          locked.prewarm_failed.remove(key);
+          locked.cookie_checked_at.remove(key);
+        }
+        Self::apply_desktop_layout_locked(app, &locked);
+      }
+      save_store_atomic(&locked.store_path, &locked.store)?;
+      (removed_keys, Self::snapshot_from_locked(&locked))
+    };
+    for key in removed_keys {
+      let _ = self.delete_profile_for_key(app, &key.uuid).await;
+    }
+
+    self.emit_snapshot(app, &snap);
+    Ok(snap)
+  }
+
   pub async fn select_provider(
     self: &Arc<Self>,
     app: &AppHandle,
@@ -4642,7 +4832,7 @@ impl SessionManager {
     #[cfg(desktop)]
     let warm_restore = {
       let mut locked = self.inner.lock().await;
-      let spec = resolve_provider(&provider_id)
+      let spec = resolve_provider_with_custom(&provider_id, &locked.store.custom_providers)
         .ok_or_else(|| "未找到对应的服务配置".to_string())?;
       locked.active_group_id = None;
       locked.selected_provider_id = provider_id.clone();
@@ -4677,7 +4867,7 @@ impl SessionManager {
     #[cfg(not(desktop))]
     {
       let mut locked = self.inner.lock().await;
-      let _ = resolve_provider(&provider_id)
+      let _ = resolve_provider_with_custom(&provider_id, &locked.store.custom_providers)
         .ok_or_else(|| "未找到对应的服务配置".to_string())?;
       locked.active_group_id = None;
       locked.selected_provider_id = provider_id;
@@ -4714,8 +4904,12 @@ impl SessionManager {
       .map(|s| s.trim())
       .filter(|s| !s.is_empty());
 
+    let custom_providers_snapshot = {
+      let locked = self.inner.lock().await;
+      locked.store.custom_providers.clone()
+    };
     let (parsed_cookie_specs, cookie_hint, url_opt, spec_enabled_check) = {
-      let spec = resolve_provider(&provider_id)
+      let spec = resolve_provider_with_custom(&provider_id, &custom_providers_snapshot)
         .ok_or_else(|| "未找到对应的服务配置".to_string())?;
       if !spec.info.enabled {
         return Err(format!("{} 当前待接入，暂不支持添加内嵌账号", spec.info.name));
@@ -4838,7 +5032,7 @@ impl SessionManager {
     let entry_url = {
       let locked = self.inner.lock().await;
       let _ = locked;
-      resolve_provider(&provider_id)
+      resolve_provider_with_custom(&provider_id, &locked.store.custom_providers)
         .ok_or_else(|| "未找到对应的服务配置".to_string())?
         .info
         .entry_url
@@ -4868,7 +5062,7 @@ impl SessionManager {
     let timezone_update = raw_timezone.map(platform::parse_account_timezone).transpose()?;
 
     let mut locked = self.inner.lock().await;
-    let spec = resolve_provider(&provider_id)
+    let spec = resolve_provider_with_custom(&provider_id, &locked.store.custom_providers)
       .ok_or_else(|| "未找到对应的服务配置".to_string())?;
     let index = locked
       .store
@@ -4966,7 +5160,7 @@ impl SessionManager {
     {
       return Err("账号归属核对失败，未找到可用的账号".to_string());
     }
-    let spec = resolve_provider(&provider_id)
+    let spec = resolve_provider_with_custom(&provider_id, &locked.store.custom_providers)
       .ok_or_else(|| "未找到对应的服务配置".to_string())?;
     if !spec.info.enabled {
       return Err("该服务尚未开放应用内嵌".to_string());
@@ -5229,7 +5423,7 @@ impl SessionManager {
         .iter()
         .find(|a| a.provider_id == key.provider_id && a.uuid == key.uuid)
         .ok_or_else(|| "未找到对应的账号记录".to_string())?;
-      let spec = resolve_provider(&provider_id)
+      let spec = resolve_provider_with_custom(&provider_id, &locked.store.custom_providers)
         .ok_or_else(|| "未找到对应的服务配置".to_string())?;
       if !spec.info.enabled {
         return Err("该服务尚未开放应用内嵌".to_string());
@@ -5530,7 +5724,7 @@ impl SessionManager {
         else {
           return Err("未找到对应的账号记录".to_string());
         };
-        let spec = resolve_provider(&provider_id)
+        let spec = resolve_provider_with_custom(&provider_id, &locked.store.custom_providers)
           .ok_or_else(|| "未找到对应的服务配置".to_string())?;
         if !spec.info.enabled {
           return Err("该服务尚未开放应用内嵌".to_string());
@@ -5796,7 +5990,7 @@ impl SessionManager {
     let homepage = {
       let locked = self.inner.lock().await;
       let _ = locked;
-      resolve_provider(&provider_id)
+      resolve_provider_with_custom(&provider_id, &locked.store.custom_providers)
         .ok_or_else(|| "未找到对应的服务配置".to_string())?
         .info
         .homepage_url
@@ -6083,7 +6277,7 @@ impl SessionManager {
         if !locked.conflicts.is_empty() {
           return Err("存在 UUID 归属冲突，已停留在管理页".to_string());
         }
-        let spec = resolve_provider(&key.provider_id)
+        let spec = resolve_provider_with_custom(&key.provider_id, &locked.store.custom_providers)
           .ok_or_else(|| "未找到对应的服务配置".to_string())?;
         if !spec.info.enabled {
           return Err(format!("{} 尚未开放应用内嵌", spec.info.name));
@@ -6306,7 +6500,7 @@ impl SessionManager {
         if !locked.conflicts.is_empty() {
           return Err("存在 UUID 归属冲突，已停留在管理页".to_string());
         }
-        let spec = resolve_provider(&key.provider_id)
+        let spec = resolve_provider_with_custom(&key.provider_id, &locked.store.custom_providers)
           .ok_or_else(|| "未找到对应的服务配置".to_string())?;
         if !spec.info.enabled {
           return Err(format!("{} 尚未开放应用内嵌", spec.info.name));
@@ -6786,7 +6980,7 @@ impl SessionManager {
         if !Self::is_view_instance_valid(&locked, key, view_instance_id) {
           return Ok(());
         }
-        let spec = resolve_provider(&key.provider_id)
+        let spec = resolve_provider_with_custom(&key.provider_id, &locked.store.custom_providers)
           .ok_or_else(|| "未找到对应的服务配置".to_string())?;
         let account = locked
           .store
@@ -6868,7 +7062,7 @@ impl SessionManager {
         let _ = webview.close();
         return Ok(());
       }
-      let spec = resolve_provider(&key.provider_id)
+      let spec = resolve_provider_with_custom(&key.provider_id, &locked.store.custom_providers)
         .ok_or_else(|| "未找到对应的服务配置".to_string())?;
       let account = locked
         .store
@@ -7148,7 +7342,7 @@ impl SessionManager {
   ) {
     let wait_params = {
       let mut locked = self.inner.lock().await;
-      let Some(spec) = resolve_provider(&key.provider_id) else {
+      let Some(spec) = resolve_provider_with_custom(&key.provider_id, &locked.store.custom_providers) else {
         return;
       };
       if classify_top_level_url(&spec, &loaded_url, false) != NavigationDecision::AllowHttps {
@@ -7321,7 +7515,7 @@ impl SessionManager {
           locked
             .last_active_per_provider
             .insert(key.provider_id.clone(), key.clone());
-          let short_name = resolve_provider(&key.provider_id)
+          let short_name = resolve_provider_with_custom(&key.provider_id, &locked.store.custom_providers)
             .map(|s| s.info.short_name)
             .unwrap_or_else(|| key.provider_id.as_str().to_string());
           let title = format!("{short_name} · {}", acc.alias);
@@ -7487,7 +7681,7 @@ impl SessionManager {
           None
         } else {
           let is_eligible_cold = |a: &&AccountRecord| {
-            if !resolve_provider(&a.provider_id).is_some_and(|s| s.info.enabled) {
+            if !resolve_provider_with_custom(&a.provider_id, &locked.store.custom_providers).is_some_and(|s| s.info.enabled) {
               return false;
             }
             let k = AccountKey {
@@ -7612,7 +7806,7 @@ impl SessionManager {
       if self.current_seq.load(Ordering::SeqCst) != expected_seq {
         return Ok(Self::snapshot_from_locked(&locked));
       }
-      let spec = resolve_provider(&account.provider_id)
+      let spec = resolve_provider_with_custom(&account.provider_id, &locked.store.custom_providers)
         .ok_or_else(|| "未找到对应的服务配置".to_string())?;
       locked.active_slot = Some(ActiveSessionSlot {
         account_key: key,
@@ -7873,7 +8067,7 @@ impl SessionManager {
       if self.current_seq.load(Ordering::SeqCst) != expected_seq {
         return;
       }
-      let Some(spec) = resolve_provider(&key.provider_id) else {
+      let Some(spec) = resolve_provider_with_custom(&key.provider_id, &locked.store.custom_providers) else {
         return;
       };
       if classify_top_level_url(&spec, &committed_url, false) != NavigationDecision::AllowHttps {
@@ -7947,7 +8141,7 @@ impl SessionManager {
         return;
       }
       let cur_seq = self.current_seq.load(Ordering::SeqCst);
-      let entry_ok = resolve_provider(&key.provider_id)
+      let entry_ok = resolve_provider_with_custom(&key.provider_id, &locked.store.custom_providers)
         .and_then(|spec| {
           Url::parse(&spec.info.entry_url)
             .ok()
@@ -8695,7 +8889,7 @@ impl SessionManager {
             }
           }
         }
-        let Some(spec) = resolve_provider(&key.provider_id) else {
+        let Some(spec) = resolve_provider_with_custom(&key.provider_id, &locked.store.custom_providers) else {
           return;
         };
         if !spec.info.enabled {
@@ -8854,7 +9048,7 @@ impl SessionManager {
           .map(|s| s.committed && &s.account_key == key)
           .unwrap_or(false);
         if is_fg {
-          let short_name = resolve_provider(&key.provider_id)
+          let short_name = resolve_provider_with_custom(&key.provider_id, &locked.store.custom_providers)
             .map(|s| s.info.short_name)
             .unwrap_or_else(|| key.provider_id.as_str().to_string());
           Some(format!("{short_name} · {new_alias}"))
@@ -8941,7 +9135,7 @@ impl SessionManager {
   }
 
   fn is_account_group_eligible(acc: &AccountRecord, now: u64) -> bool {
-    resolve_provider(&acc.provider_id).is_some_and(|s| s.info.enabled)
+    resolve_provider_with_custom(&acc.provider_id, &locked.store.custom_providers).is_some_and(|s| s.info.enabled)
       && acc.auth_state == AuthState::Authenticated
       && acc.cookie_expires_at_ms.is_none_or(|exp| exp > now)
   }
@@ -9837,7 +10031,7 @@ impl SessionManager {
         .find(|a| a.provider_id == member.provider_id && a.uuid == member.uuid)
       {
         if acc.auth_state != AuthState::LoggedOut
-          && resolve_provider(&acc.provider_id).is_some_and(|s| s.info.enabled)
+          && resolve_provider_with_custom(&acc.provider_id, &locked.store.custom_providers).is_some_and(|s| s.info.enabled)
           && !locked.account_page_errors.contains_key(member)
         {
           eligible_members.push((member.clone(), acc.alias.clone()));
@@ -9855,7 +10049,7 @@ impl SessionManager {
     if channel_pid.is_cli() {
       return "本地 CLI".to_string();
     }
-    resolve_provider(channel_pid)
+    resolve_provider_with_custom(channel_pid, &locked.store.custom_providers)
       .map(|s| s.info.short_name)
       .unwrap_or_else(|| channel_pid.as_str().to_string())
   }
@@ -10521,7 +10715,7 @@ impl SessionManager {
             .find(|a| a.provider_id == member_key.provider_id && a.uuid == member_key.uuid)
             .is_some_and(|acc| {
               acc.auth_state != AuthState::LoggedOut
-                && resolve_provider(&acc.provider_id).is_some_and(|s| s.info.enabled)
+                && resolve_provider_with_custom(&acc.provider_id, &locked.store.custom_providers).is_some_and(|s| s.info.enabled)
             })
         };
         if !member_available {
@@ -10639,7 +10833,7 @@ impl SessionManager {
           .find(|a| a.provider_id == member_key.provider_id && a.uuid == member_key.uuid)
           .is_some_and(|acc| {
             acc.auth_state != AuthState::LoggedOut
-              && resolve_provider(&acc.provider_id).is_some_and(|s| s.info.enabled)
+              && resolve_provider_with_custom(&acc.provider_id, &locked.store.custom_providers).is_some_and(|s| s.info.enabled)
           });
         if !member_available {
           return Err("该成员当前未登录或配置不可用，请先检查成员状态".to_string());
@@ -10915,7 +11109,7 @@ impl SessionManager {
     };
     let (app_data_dir, spec_opt, bound_url) = {
       let locked = self.inner.lock().await;
-      let spec = resolve_provider(&member_key.provider_id);
+      let spec = resolve_provider_with_custom(&member_key.provider_id, &locked.store.custom_providers);
       let bound = locked
         .store
         .group_chats
@@ -11016,7 +11210,7 @@ impl SessionManager {
 
     let snap_opt = {
       let mut locked = self.inner.lock().await;
-      let valid_url = resolve_provider(&member_key.provider_id)
+      let valid_url = resolve_provider_with_custom(&member_key.provider_id, &locked.store.custom_providers)
         .is_some_and(|spec| {
           matches!(
             classify_top_level_url(&spec, &cur_url, false),
@@ -12682,7 +12876,7 @@ impl SessionManager {
               .iter()
               .find(|a| a.provider_id == m.provider_id && a.uuid == m.uuid)
               .filter(|a| a.auth_state != AuthState::LoggedOut && a.cookie_expires_at_ms.is_none_or(|exp| exp > now))
-              .filter(|a| resolve_provider(&a.provider_id).is_some_and(|s| s.info.enabled))
+              .filter(|a| resolve_provider_with_custom(&a.provider_id, &locked.store.custom_providers).is_some_and(|s| s.info.enabled))
               .map(|a| (m.clone(), a.alias.clone()))
           }
         })

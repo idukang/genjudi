@@ -51,9 +51,26 @@ impl ProviderId {
     self.is_muse() || self.is_hark()
   }
 
+  pub fn is_custom(&self) -> bool {
+    self.0.starts_with("custom-")
+  }
+
+  #[cfg_attr(not(desktop), allow(dead_code))]
+  pub fn is_web_provider(&self) -> bool {
+    self.is_builtin() || self.is_custom()
+  }
+
   pub fn parse(value: &str) -> Option<Self> {
     let clean = value.trim().to_ascii_lowercase();
     if clean == "muse" || clean == "hark" || clean == "api" || clean == "cli" {
+      Some(Self(clean))
+    } else if clean.starts_with("custom-")
+      && clean.len() > 7
+      && clean.len() <= 48
+      && clean
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
       Some(Self(clean))
     } else {
       None
@@ -68,6 +85,7 @@ pub struct ProviderInfo {
   pub name: String,
   pub short_name: String,
   pub enabled: bool,
+  pub is_custom: bool,
   pub status_text: String,
   pub entry_url: String,
   pub homepage_url: String,
@@ -89,6 +107,7 @@ pub fn builtin_provider_specs() -> Vec<ProviderSpec> {
         name: "Muse · Meta".to_string(),
         short_name: "Muse".to_string(),
         enabled: true,
+        is_custom: false,
         status_text: "已启用".to_string(),
         entry_url: "https://muse.ai/".to_string(),
         homepage_url: "https://muse.ai/".to_string(),
@@ -118,6 +137,7 @@ pub fn builtin_provider_specs() -> Vec<ProviderSpec> {
         name: "Hark".to_string(),
         short_name: "Hark".to_string(),
         enabled: true,
+        is_custom: false,
         status_text: "已启用".to_string(),
         entry_url: "https://app.hark.com/".to_string(),
         homepage_url: "https://hark.com/".to_string(),
@@ -141,20 +161,111 @@ pub fn builtin_provider_specs() -> Vec<ProviderSpec> {
   ]
 }
 
-pub fn resolve_provider(id: &ProviderId) -> Option<ProviderSpec> {
-  if !id.is_builtin() {
-    return None;
+fn root_domain_for_host(host: &str) -> String {
+  let parts: Vec<&str> = host.split('.').filter(|p| !p.is_empty()).collect();
+  if parts.len() >= 3 {
+    parts[parts.len() - 2..].join(".")
+  } else {
+    host.to_string()
   }
-  builtin_provider_specs()
-    .into_iter()
-    .find(|p| &p.info.id == id)
 }
 
-pub fn all_provider_infos() -> Vec<ProviderInfo> {
-  builtin_provider_specs()
+pub fn build_custom_provider_spec(rec: &crate::storage::CustomProviderRecord) -> Option<ProviderSpec> {
+  if !rec.id.is_custom() {
+    return None;
+  }
+  let parsed = Url::parse(rec.entry_url.trim()).ok()?;
+  if parsed.scheme() != "https" {
+    return None;
+  }
+  let host = parsed.host_str()?.to_ascii_lowercase();
+  let origin = parsed.origin().ascii_serialization();
+  let name = rec.name.trim().to_string();
+  if name.is_empty() {
+    return None;
+  }
+  let short_name: String = name.chars().take(10).collect();
+
+  let mut allowed_hosts = vec![host.clone()];
+  let root = root_domain_for_host(&host);
+  if !allowed_hosts.iter().any(|h| h.eq_ignore_ascii_case(&root)) {
+    allowed_hosts.push(root);
+  }
+  for extra in &rec.extra_hosts {
+    let clean = extra.trim().to_ascii_lowercase();
+    if !clean.is_empty() && !allowed_hosts.iter().any(|h| h == &clean) {
+      allowed_hosts.push(clean);
+    }
+  }
+  for oauth_host in [
+    "appleid.apple.com",
+    "idmsa.apple.com",
+    "login.microsoftonline.com",
+    "github.com",
+  ] {
+    if !allowed_hosts.iter().any(|h| h == oauth_host) {
+      allowed_hosts.push(oauth_host.to_string());
+    }
+  }
+
+  Some(ProviderSpec {
+    info: ProviderInfo {
+      id: rec.id.clone(),
+      name,
+      short_name,
+      enabled: true,
+      is_custom: true,
+      status_text: "自定义".to_string(),
+      entry_url: parsed.to_string(),
+      homepage_url: origin.clone(),
+      callback_origins: vec![origin],
+      verified_methods: vec!["email".to_string(), "cookie".to_string()],
+    },
+    allowed_hosts,
+  })
+}
+
+pub fn resolve_provider_with_custom(
+  id: &ProviderId,
+  custom: &[crate::storage::CustomProviderRecord],
+) -> Option<ProviderSpec> {
+  if id.is_builtin() {
+    return builtin_provider_specs()
+      .into_iter()
+      .find(|p| &p.info.id == id);
+  }
+  if id.is_custom() {
+    return custom
+      .iter()
+      .find(|c| &c.id == id)
+      .and_then(build_custom_provider_spec);
+  }
+  None
+}
+
+pub fn all_provider_infos_with_custom(
+  custom: &[crate::storage::CustomProviderRecord],
+) -> Vec<ProviderInfo> {
+  let mut list: Vec<ProviderInfo> = builtin_provider_specs()
     .into_iter()
     .map(|p| p.info)
-    .collect()
+    .collect();
+  for rec in custom {
+    if let Some(spec) = build_custom_provider_spec(rec) {
+      list.push(spec.info);
+    }
+  }
+  list
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn resolve_provider(id: &ProviderId) -> Option<ProviderSpec> {
+  resolve_provider_with_custom(id, &[])
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn all_provider_infos() -> Vec<ProviderInfo> {
+  all_provider_infos_with_custom(&[])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
