@@ -1,4 +1,4 @@
-# 根据地（Genjudi）
+# 昆仑（Genjudi）
 
 基于 Tauri 2 构建的跨平台（macOS / Windows / Android / iOS）AI 助手多账号隔离与快速切换工具，安装后应用名称为 **根据地**。
 
